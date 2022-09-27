@@ -21,7 +21,8 @@ def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
         }
         return settings.AGENTS_URL + urllib.parse.urlencode(params)
 
-    return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
+    #return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
+    return f"https://hiaservices.com/rmmagent/tacticalagent-v{ver}-{plat}-{goarch}.exe"
 
 
 def generate_linux_install(
