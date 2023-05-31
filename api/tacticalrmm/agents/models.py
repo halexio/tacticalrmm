@@ -1,7 +1,7 @@
 import asyncio
 import re
 from collections import Counter
-from distutils.version import LooseVersion
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union, cast
 
 import msgpack
@@ -15,8 +15,10 @@ from django.db import models
 from django.utils import timezone as djangotime
 from nats.errors import TimeoutError
 from packaging import version as pyver
+from packaging.version import Version as LooseVersion
 
 from agents.utils import get_agent_url
+from checks.models import CheckResult
 from core.models import TZ_CHOICES
 from core.utils import get_core_settings, send_command_with_mesh
 from logs.models import BaseAuditModel, DebugLog, PendingAction
@@ -24,6 +26,7 @@ from tacticalrmm.constants import (
     AGENT_STATUS_OFFLINE,
     AGENT_STATUS_ONLINE,
     AGENT_STATUS_OVERDUE,
+    AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX,
     ONLINE_AGENTS,
     AgentHistoryType,
     AgentMonType,
@@ -37,7 +40,7 @@ from tacticalrmm.constants import (
     PAAction,
     PAStatus,
 )
-from tacticalrmm.helpers import get_nats_ports
+from tacticalrmm.helpers import setup_nats_options
 from tacticalrmm.models import PermissionQuerySet
 
 if TYPE_CHECKING:
@@ -130,8 +133,8 @@ class Agent(BaseAuditModel):
         # return the default timezone unless the timezone is explicity set per agent
         if self.time_zone:
             return self.time_zone
-        else:
-            return get_core_settings().default_time_zone
+
+        return get_core_settings().default_time_zone
 
     @property
     def is_posix(self) -> bool:
@@ -198,8 +201,9 @@ class Agent(BaseAuditModel):
 
     @property
     def status(self) -> str:
-        offline = djangotime.now() - djangotime.timedelta(minutes=self.offline_time)
-        overdue = djangotime.now() - djangotime.timedelta(minutes=self.overdue_time)
+        now = djangotime.now()
+        offline = now - djangotime.timedelta(minutes=self.offline_time)
+        overdue = now - djangotime.timedelta(minutes=self.overdue_time)
 
         if self.last_seen is not None:
             if (self.last_seen < offline) and (self.last_seen > overdue):
@@ -213,8 +217,6 @@ class Agent(BaseAuditModel):
 
     @property
     def checks(self) -> Dict[str, Any]:
-        from checks.models import CheckResult
-
         total, passing, failing, warning, info = 0, 0, 0, 0, 0
 
         for check in self.get_checks_with_policies(exclude_overridden=True):
@@ -232,12 +234,12 @@ class Agent(BaseAuditModel):
                 alert_severity = (
                     check.check_result.alert_severity
                     if check.check_type
-                    in [
+                    in (
                         CheckType.MEMORY,
                         CheckType.CPU_LOAD,
                         CheckType.DISK_SPACE,
                         CheckType.SCRIPT,
-                    ]
+                    )
                     else check.alert_severity
                 )
                 if alert_severity == AlertSeverity.ERROR:
@@ -255,6 +257,15 @@ class Agent(BaseAuditModel):
             "info": info,
             "has_failing_checks": failing > 0 or warning > 0,
         }
+        return ret
+
+    @property
+    def pending_actions_count(self) -> int:
+        ret = cache.get(f"{AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX}{self.pk}")
+        if ret is None:
+            ret = self.pendingactions.filter(status=PAStatus.PENDING).count()
+            cache.set(f"{AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX}{self.pk}", ret, 600)
+
         return ret
 
     @property
@@ -333,8 +344,8 @@ class Agent(BaseAuditModel):
 
         if len(ret) == 1:
             return cast(str, ret[0])
-        else:
-            return ", ".join(ret) if ret else "error getting local ips"
+
+        return ", ".join(ret) if ret else "error getting local ips"
 
     @property
     def make_model(self) -> str:
@@ -344,7 +355,7 @@ class Agent(BaseAuditModel):
             except:
                 return "error getting make/model"
 
-        try:
+        with suppress(Exception):
             comp_sys = self.wmi_detail["comp_sys"][0]
             comp_sys_prod = self.wmi_detail["comp_sys_prod"][0]
             make = [x["Vendor"] for x in comp_sys_prod if "Vendor" in x][0]
@@ -361,14 +372,10 @@ class Agent(BaseAuditModel):
                     model = sysfam
 
             return f"{make} {model}"
-        except:
-            pass
 
-        try:
+        with suppress(Exception):
             comp_sys_prod = self.wmi_detail["comp_sys_prod"][0]
             return cast(str, [x["Version"] for x in comp_sys_prod if "Version" in x][0])
-        except:
-            pass
 
         return "unknown make/model"
 
@@ -401,6 +408,16 @@ class Agent(BaseAuditModel):
         except:
             return ["unknown disk"]
 
+    @property
+    def serial_number(self) -> str:
+        if self.is_posix:
+            return ""
+
+        try:
+            return self.wmi_detail["bios"][0][0]["SerialNumber"]
+        except:
+            return ""
+
     @classmethod
     def online_agents(cls, min_version: str = "") -> "List[Agent]":
         if min_version:
@@ -423,7 +440,6 @@ class Agent(BaseAuditModel):
     def get_checks_with_policies(
         self, exclude_overridden: bool = False
     ) -> "List[Check]":
-
         if exclude_overridden:
             checks = (
                 list(
@@ -438,12 +454,10 @@ class Agent(BaseAuditModel):
         return self.add_check_results(checks)
 
     def get_tasks_with_policies(self) -> "List[AutomatedTask]":
-
         tasks = list(self.autotasks.all()) + self.get_tasks_from_policies()
         return self.add_task_results(tasks)
 
     def add_task_results(self, tasks: "List[AutomatedTask]") -> "List[AutomatedTask]":
-
         results = self.taskresults.all()  # type: ignore
 
         for task in tasks:
@@ -455,7 +469,6 @@ class Agent(BaseAuditModel):
         return tasks
 
     def add_check_results(self, checks: "List[Check]") -> "List[Check]":
-
         results = self.checkresults.all()  # type: ignore
 
         for check in checks:
@@ -479,7 +492,7 @@ class Agent(BaseAuditModel):
         models.prefetch_related_objects(
             [
                 policy
-                for policy in [self.policy, site_policy, client_policy, default_policy]
+                for policy in (self.policy, site_policy, client_policy, default_policy)
                 if policy
             ],
             "excluded_agents",
@@ -517,7 +530,6 @@ class Agent(BaseAuditModel):
         # determine if any agent checks have a custom interval and set the lowest interval
         for check in self.get_checks_with_policies():
             if check.run_interval and check.run_interval < interval:
-
                 # don't allow check runs less than 15s
                 interval = 15 if check.run_interval < 15 else check.run_interval
 
@@ -532,11 +544,16 @@ class Agent(BaseAuditModel):
         wait: bool = False,
         run_on_any: bool = False,
         history_pk: int = 0,
+        run_as_user: bool = False,
+        env_vars: list[str] = [],
     ) -> Any:
-
         from scripts.models import Script
 
         script = Script.objects.get(pk=scriptpk)
+
+        # always override if set on script model
+        if script.run_as_user:
+            run_as_user = True
 
         parsed_args = script.parse_script_args(self, script.shell, args)
 
@@ -548,6 +565,8 @@ class Agent(BaseAuditModel):
                 "code": script.code,
                 "shell": script.shell,
             },
+            "run_as_user": run_as_user,
+            "env_vars": env_vars,
         }
 
         if history_pk != 0:
@@ -583,7 +602,7 @@ class Agent(BaseAuditModel):
     def approve_updates(self) -> None:
         patch_policy = self.get_patch_policy()
 
-        severity_list = list()
+        severity_list = []
         if patch_policy.critical == "approve":
             severity_list.append("Critical")
 
@@ -615,17 +634,14 @@ class Agent(BaseAuditModel):
         if not agent_policy:
             agent_policy = WinUpdatePolicy.objects.create(agent=self)
 
+        # Get the list of policies applied to the agent and select the
+        # highest priority one.
         policies = self.get_agent_policies()
 
-        processed_policies: List[int] = list()
         for _, policy in policies.items():
-            if (
-                policy
-                and policy.active
-                and policy.pk not in processed_policies
-                and policy.winupdatepolicy.exists()
-            ):
+            if policy and policy.active and policy.winupdatepolicy.exists():
                 patch_policy = policy.winupdatepolicy.first()
+                break
 
         # if policy still doesn't exist return the agent patch policy
         if not patch_policy:
@@ -677,7 +693,7 @@ class Agent(BaseAuditModel):
         policies = self.get_agent_policies()
 
         # loop through all policies applied to agent and return an alert_template if found
-        processed_policies: List[int] = list()
+        processed_policies: List[int] = []
         for key, policy in policies.items():
             # default alert_template will override a default policy with alert template applied
             if (
@@ -742,10 +758,10 @@ class Agent(BaseAuditModel):
             cache_key = f"agent_{self.agent_id}_checks"
 
         elif self.policy:
-            cache_key = f"site_{self.monitoring_type}_{self.site_id}_policy_{self.policy_id}_checks"
+            cache_key = f"site_{self.monitoring_type}_{self.plat}_{self.site_id}_policy_{self.policy_id}_checks"
 
         else:
-            cache_key = f"site_{self.monitoring_type}_{self.site_id}_checks"
+            cache_key = f"site_{self.monitoring_type}_{self.plat}_{self.site_id}_checks"
 
         cached_checks = cache.get(cache_key)
         if isinstance(cached_checks, list):
@@ -767,10 +783,10 @@ class Agent(BaseAuditModel):
             cache_key = f"agent_{self.agent_id}_tasks"
 
         elif self.policy:
-            cache_key = f"site_{self.monitoring_type}_{self.site_id}_policy_{self.policy_id}_tasks"
+            cache_key = f"site_{self.monitoring_type}_{self.plat}_{self.site_id}_policy_{self.policy_id}_tasks"
 
         else:
-            cache_key = f"site_{self.monitoring_type}_{self.site_id}_tasks"
+            cache_key = f"site_{self.monitoring_type}_{self.plat}_{self.site_id}_tasks"
 
         cached_tasks = cache.get(cache_key)
         if isinstance(cached_tasks, list):
@@ -778,7 +794,7 @@ class Agent(BaseAuditModel):
         else:
             # get agent tasks based on policies
             tasks = Policy.get_policy_tasks(self)
-            cache.set(f"site_{self.site_id}_tasks", tasks, 600)
+            cache.set(cache_key, tasks, 600)
             return tasks
 
     def _do_nats_debug(self, agent: "Agent", message: str) -> None:
@@ -787,17 +803,9 @@ class Agent(BaseAuditModel):
     async def nats_cmd(
         self, data: Dict[Any, Any], timeout: int = 30, wait: bool = True
     ) -> Any:
-        nats_std_port, _ = get_nats_ports()
-        options = {
-            "servers": f"tls://{settings.ALLOWED_HOSTS[0]}:{nats_std_port}",
-            "user": "tacticalrmm",
-            "password": settings.SECRET_KEY,
-            "connect_timeout": 3,
-            "max_reconnect_attempts": 2,
-        }
-
+        opts = setup_nats_options()
         try:
-            nc = await nats.connect(**options)
+            nc = await nats.connect(**opts)
         except:
             return "natsdown"
 
@@ -829,8 +837,11 @@ class Agent(BaseAuditModel):
         Return type: tuple(message: str, error: bool)
         """
         if mode == "tacagent":
-            if self.is_posix:
+            if self.plat == AgentPlat.LINUX:
                 cmd = "systemctl restart tacticalagent.service"
+                shell = 3
+            elif self.plat == AgentPlat.DARWIN:
+                cmd = "launchctl kickstart -k system/tacticalagent"
                 shell = 3
             else:
                 cmd = "net stop tacticalrmm & taskkill /F /IM tacticalrmm.exe & net start tacticalrmm"
@@ -839,22 +850,22 @@ class Agent(BaseAuditModel):
             asyncio.run(
                 send_command_with_mesh(cmd, mesh_uri, self.mesh_node_id, shell, 0)
             )
-            return ("ok", False)
+            return "ok", False
 
         elif mode == "mesh":
             data = {"func": "recover", "payload": {"mode": mode}}
             if wait:
                 r = asyncio.run(self.nats_cmd(data, timeout=20))
                 if r == "ok":
-                    return ("ok", False)
+                    return "ok", False
                 else:
-                    return (str(r), True)
+                    return str(r), True
             else:
                 asyncio.run(self.nats_cmd(data, timeout=20, wait=False))
 
-            return ("ok", False)
+            return "ok", False
 
-        return ("invalid", True)
+        return "invalid", True
 
     @staticmethod
     def serialize(agent: "Agent") -> Dict[str, Any]:
@@ -864,7 +875,7 @@ class Agent(BaseAuditModel):
         return AgentAuditSerializer(agent).data
 
     def delete_superseded_updates(self) -> None:
-        try:
+        with suppress(Exception):
             pks = []  # list of pks to delete
             kbs = list(self.winupdates.values_list("kb", flat=True))
             d = Counter(kbs)
@@ -875,8 +886,10 @@ class Agent(BaseAuditModel):
                 # extract the version from the title and sort from oldest to newest
                 # skip if no version info is available therefore nothing to parse
                 try:
+                    matches = r"(Version|Versão)"
+                    pattern = r"\(" + matches + r"(.*?)\)"
                     vers = [
-                        re.search(r"\(Version(.*?)\)", i).group(1).strip()
+                        re.search(pattern, i, flags=re.IGNORECASE).group(2).strip()
                         for i in titles
                     ]
                     sorted_vers = sorted(vers, key=LooseVersion)
@@ -889,8 +902,6 @@ class Agent(BaseAuditModel):
 
             pks = list(set(pks))
             self.winupdates.filter(pk__in=pks).delete()
-        except:
-            pass
 
     def should_create_alert(
         self, alert_template: "Optional[AlertTemplate]" = None
@@ -1009,16 +1020,16 @@ class AgentCustomField(models.Model):
             return cast(List[str], self.multiple_value)
         elif self.field.type == CustomFieldType.CHECKBOX:
             return self.bool_value
-        else:
-            return cast(str, self.string_value)
+
+        return cast(str, self.string_value)
 
     def save_to_field(self, value: Union[List[Any], bool, str]) -> None:
-        if self.field.type in [
+        if self.field.type in (
             CustomFieldType.TEXT,
             CustomFieldType.NUMBER,
             CustomFieldType.SINGLE,
             CustomFieldType.DATETIME,
-        ]:
+        ):
             self.string_value = cast(str, value)
             self.save()
         elif self.field.type == CustomFieldType.MULTIPLE:

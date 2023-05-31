@@ -14,11 +14,13 @@ from agents.models import Agent
 from alerts.models import Alert
 from automation.models import Policy
 from tacticalrmm.constants import CheckStatus, CheckType
+from tacticalrmm.exceptions import NatsDown
 from tacticalrmm.helpers import notify_error
+from tacticalrmm.nats_utils import abulk_nats_command
 from tacticalrmm.permissions import _has_perm_on_agent
 
 from .models import Check, CheckHistory, CheckResult
-from .permissions import ChecksPerms, RunChecksPerms
+from .permissions import BulkRunChecksPerms, ChecksPerms, RunChecksPerms
 from .serializers import CheckHistorySerializer, CheckSerializer
 
 
@@ -37,7 +39,6 @@ class GetAddChecks(APIView):
         return Response(CheckSerializer(checks, many=True).data)
 
     def post(self, request):
-
         data = request.data.copy()
         # Determine if adding check to Agent and replace agent_id with pk
         if "agent" in data.keys():
@@ -169,6 +170,37 @@ def run_checks(request, agent_id):
     if r == "busy":
         return notify_error(f"Checks are already running on {agent.hostname}")
     elif r == "ok":
-        return Response(f"Checks will now be re-run on {agent.hostname}")
-    else:
-        return notify_error("Unable to contact the agent")
+        return Response(f"Checks will now be run on {agent.hostname}")
+
+    return notify_error("Unable to contact the agent")
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated, BulkRunChecksPerms])
+def bulk_run_checks(request, target, pk):
+    q = Q()
+    match target:
+        case "client":
+            q = Q(site__client__id=pk)
+        case "site":
+            q = Q(site__id=pk)
+
+    agent_ids = list(
+        Agent.objects.only("agent_id", "site")
+        .filter(q)
+        .values_list("agent_id", flat=True)
+    )
+
+    if not agent_ids:
+        return notify_error("No agents matched query")
+
+    payload = {"func": "runchecks"}
+    items = [(agent_id, payload) for agent_id in agent_ids]
+
+    try:
+        asyncio.run(abulk_nats_command(items=items))
+    except NatsDown as e:
+        return notify_error(str(e))
+
+    ret = f"Checks will now be run on {len(agent_ids)} agents"
+    return Response(ret)

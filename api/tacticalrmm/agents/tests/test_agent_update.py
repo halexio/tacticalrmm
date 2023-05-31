@@ -84,7 +84,7 @@ class TestAgentUpdate(TacticalTestCase):
             site=self.site1,
             monitoring_type=AgentMonType.SERVER,
             plat=AgentPlat.WINDOWS,
-            version="2.3.0",
+            version="2.1.1",
         )
         r = agent_noarch.do_update(token="", force=True)
         self.assertEqual(r, "noarch")
@@ -106,7 +106,7 @@ class TestAgentUpdate(TacticalTestCase):
             site=self.site1,
             monitoring_type=AgentMonType.SERVER,
             plat=AgentPlat.WINDOWS,
-            version="2.3.0",
+            version="2.1.1",
             goarch=GoArch.AMD64,
         )
 
@@ -115,7 +115,7 @@ class TestAgentUpdate(TacticalTestCase):
             site=self.site3,
             monitoring_type=AgentMonType.WORKSTATION,
             plat=AgentPlat.LINUX,
-            version="2.3.0",
+            version="2.1.1",
             goarch=GoArch.ARM32,
         )
 
@@ -193,7 +193,7 @@ class TestAgentUpdate(TacticalTestCase):
             site=self.site2,
             monitoring_type=AgentMonType.SERVER,
             plat=AgentPlat.WINDOWS,
-            version="2.3.0",
+            version="2.1.1",
             goarch=GoArch.AMD64,
             _quantity=6,
         )
@@ -215,7 +215,7 @@ class TestAgentUpdate(TacticalTestCase):
             site=self.site2,
             monitoring_type=AgentMonType.SERVER,
             plat=AgentPlat.WINDOWS,
-            version="2.3.0",
+            version="2.1.1",
             goarch=GoArch.AMD64,
             _quantity=7,
         )
@@ -264,7 +264,7 @@ class TestAgentUpdate(TacticalTestCase):
         agents = baker.make_recipe("agents.agent", _quantity=5)
         other_agents = baker.make_recipe("agents.agent", _quantity=7)
 
-        url = f"/agents/update/"
+        url = "/agents/update/"
 
         data = {
             "agent_ids": [agent.agent_id for agent in agents]

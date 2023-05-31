@@ -10,6 +10,7 @@ class MeshAgentIdent(Enum):
     LINUX64 = 6
     LINUX_ARM_64 = 26
     LINUX_ARM_HF = 25
+    DARWIN_UNIVERSAL = 10005
 
     def __str__(self):
         return str(self.value)
@@ -17,10 +18,17 @@ class MeshAgentIdent(Enum):
 
 CORESETTINGS_CACHE_KEY = "core_settings"
 ROLE_CACHE_PREFIX = "role_"
+AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX = "agent_tbl_pendingactions_"
 
 AGENT_STATUS_ONLINE = "online"
 AGENT_STATUS_OFFLINE = "offline"
 AGENT_STATUS_OVERDUE = "overdue"
+
+REDIS_LOCK_EXPIRE = 60 * 60 * 2  # Lock expires in 2 hours
+RESOLVE_ALERTS_LOCK = "resolve-alerts-lock-key"
+SYNC_SCHED_TASK_LOCK = "sync-sched-tasks-lock-key"
+AGENT_OUTAGES_LOCK = "agent-outages-task-lock-key"
+ORPHANED_WIN_TASK_LOCK = "orphaned-win-task-lock-key"
 
 
 class GoArch(models.TextChoices):
@@ -240,6 +248,14 @@ AGENT_DEFER = (
     "modified_time",
 )
 
+AGENT_TABLE_DEFER = (
+    "services",
+    "created_by",
+    "created_time",
+    "modified_by",
+    "modified_time",
+)
+
 ONLINE_AGENTS = (
     "pk",
     "agent_id",
@@ -407,6 +423,10 @@ DEMO_NOT_ALLOWED = [
     {"name": "InstallWindowsUpdates", "methods": ["POST"]},
     {"name": "PendingActions", "methods": ["DELETE"]},
     {"name": "clear_cache", "methods": ["GET"]},
+    {"name": "ResetPass", "methods": ["PUT"]},
+    {"name": "Reset2FA", "methods": ["PUT"]},
+    {"name": "bulk_run_checks", "methods": ["GET"]},
+    {"name": "OpenAICodeCompletion", "methods": ["POST"]},
 ]
 
 CONFIG_MGMT_CMDS = (
@@ -416,6 +436,7 @@ CONFIG_MGMT_CMDS = (
     "meshver",
     "natsver",
     "frontend",
+    "webdomain",
     "djangoadmin",
     "setuptoolsver",
     "wheelver",
@@ -427,4 +448,5 @@ CONFIG_MGMT_CMDS = (
     "meshsite",
     "meshuser",
     "meshtoken",
+    "meshdomain",
 )

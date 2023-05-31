@@ -20,6 +20,10 @@ class UserUISerializer(ModelSerializer):
             "client_tree_sort",
             "client_tree_splitter",
             "loading_bar_color",
+            "dash_info_color",
+            "dash_positive_color",
+            "dash_negative_color",
+            "dash_warning_color",
             "clear_search_when_switching",
             "block_dashboard_login",
             "date_format",
@@ -45,7 +49,6 @@ class UserSerializer(ModelSerializer):
 
 
 class TOTPSetupSerializer(ModelSerializer):
-
     qr_url = SerializerMethodField()
 
     class Meta:
@@ -80,7 +83,6 @@ class RoleAuditSerializer(ModelSerializer):
 
 
 class APIKeySerializer(ModelSerializer):
-
     username = ReadOnlyField(source="user.username")
 
     class Meta:

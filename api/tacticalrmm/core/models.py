@@ -1,4 +1,5 @@
 import smtplib
+from contextlib import suppress
 from email.message import EmailMessage
 from typing import TYPE_CHECKING, List, Optional, cast
 
@@ -97,6 +98,10 @@ class CoreSettings(BaseAuditModel):
     date_format = models.CharField(
         max_length=30, blank=True, default="MMM-DD-YYYY - HH:mm"
     )
+    open_ai_token = models.CharField(max_length=255, null=True, blank=True)
+    open_ai_model = models.CharField(
+        max_length=255, blank=True, default="gpt-3.5-turbo"
+    )
 
     def save(self, *args, **kwargs) -> None:
         from alerts.tasks import cache_agents_alert_template
@@ -108,12 +113,10 @@ class CoreSettings(BaseAuditModel):
 
         # for install script
         if not self.pk:
-            try:
+            with suppress(Exception):
                 self.mesh_site = settings.MESH_SITE
                 self.mesh_username = settings.MESH_USERNAME.lower()
                 self.mesh_token = settings.MESH_TOKEN_KEY
-            except:
-                pass
 
         old_settings = type(self).objects.get(pk=self.pk) if self.pk else None
         super(BaseAuditModel, self).save(*args, **kwargs)
@@ -127,10 +130,10 @@ class CoreSettings(BaseAuditModel):
                 cache_agents_alert_template.delay()
 
             if old_settings.workstation_policy != self.workstation_policy:
-                cache.delete_many_pattern(f"site_workstation_*")
+                cache.delete_many_pattern("site_workstation_*")
 
             if old_settings.server_policy != self.server_policy:
-                cache.delete_many_pattern(f"site_server_*")
+                cache.delete_many_pattern("site_server_*")
 
             if (
                 old_settings.server_policy != self.server_policy
@@ -182,10 +185,10 @@ class CoreSettings(BaseAuditModel):
         test: bool = False,
     ) -> tuple[str, bool]:
         if test and not self.email_is_configured:
-            return ("There needs to be at least one email recipient configured", False)
+            return "There needs to be at least one email recipient configured", False
         # return since email must be configured to continue
         elif not self.email_is_configured:
-            return ("SMTP messaging not configured.", False)
+            return "SMTP messaging not configured.", False
 
         # override email from if alert_template is passed and is set
         if alert_template and alert_template.email_from:
@@ -199,7 +202,7 @@ class CoreSettings(BaseAuditModel):
         elif self.email_alert_recipients:
             email_recipients = ", ".join(cast(List[str], self.email_alert_recipients))
         else:
-            return ("There needs to be at least one email recipient configured", False)
+            return "There needs to be at least one email recipient configured", False
 
         try:
             msg = EmailMessage()
@@ -226,12 +229,12 @@ class CoreSettings(BaseAuditModel):
         except Exception as e:
             DebugLog.error(message=f"Sending email failed with error: {e}")
             if test:
-                return (str(e), False)
+                return str(e), False
 
         if test:
-            return ("Email test ok!", True)
+            return "Email test ok!", True
 
-        return ("ok", True)
+        return "ok", True
 
     def send_sms(
         self,
@@ -240,7 +243,7 @@ class CoreSettings(BaseAuditModel):
         test: bool = False,
     ) -> tuple[str, bool]:
         if not self.sms_is_configured:
-            return ("Sms alerting is not setup correctly.", False)
+            return "Sms alerting is not setup correctly.", False
 
         # override email recipients if alert_template is passed and is set
         if alert_template and alert_template.text_recipients:
@@ -248,7 +251,7 @@ class CoreSettings(BaseAuditModel):
         elif self.sms_alert_recipients:
             text_recipients = cast(List[str], self.sms_alert_recipients)
         else:
-            return ("No sms recipients found", False)
+            return "No sms recipients found", False
 
         tw_client = TwClient(self.twilio_account_sid, self.twilio_auth_token)
         for num in text_recipients:
@@ -257,12 +260,12 @@ class CoreSettings(BaseAuditModel):
             except TwilioRestException as e:
                 DebugLog.error(message=f"SMS failed to send: {e}")
                 if test:
-                    return (str(e), False)
+                    return str(e), False
 
         if test:
-            return ("SMS Test sent successfully!", True)
+            return "SMS Test sent successfully!", True
 
-        return ("ok", True)
+        return "ok", True
 
     @staticmethod
     def serialize(core):
@@ -273,7 +276,6 @@ class CoreSettings(BaseAuditModel):
 
 
 class CustomField(BaseAuditModel):
-
     order = models.PositiveIntegerField(default=0)
     model = models.CharField(max_length=25, choices=CustomFieldModel.choices)
     type = models.CharField(
@@ -315,8 +317,8 @@ class CustomField(BaseAuditModel):
             return self.default_values_multiple
         elif self.type == CustomFieldType.CHECKBOX:
             return self.default_value_bool
-        else:
-            return self.default_value_string
+
+        return self.default_value_string
 
     def get_or_create_field_value(self, instance):
         from agents.models import Agent, AgentCustomField
@@ -364,6 +366,23 @@ class CodeSignToken(models.Model):
             return False
 
         return r.status_code == 200
+
+    @property
+    def is_expired(self) -> bool:
+        if not self.token:
+            return False
+
+        try:
+            r = requests.post(
+                settings.CHECK_TOKEN_URL,
+                json={"token": self.token, "api": settings.ALLOWED_HOSTS[0]},
+                headers={"Content-type": "application/json"},
+                timeout=15,
+            )
+        except:
+            return False
+
+        return r.status_code == 401
 
     def __str__(self):
         return "Code signing token"

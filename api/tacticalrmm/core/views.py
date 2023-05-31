@@ -1,16 +1,20 @@
+import json
 import re
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import psutil
-import pytz
+import requests
 from cryptography import x509
 from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
-from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone as djangotime
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -73,8 +77,10 @@ def clear_cache(request):
 
 @api_view()
 def dashboard_info(request):
-    from tacticalrmm.utils import get_latest_trmm_ver
+    from core.utils import token_is_expired
+    from tacticalrmm.utils import get_latest_trmm_ver, runcmd_placeholder_text
 
+    core_settings = get_core_settings()
     return Response(
         {
             "trmm_version": settings.TRMM_VERSION,
@@ -92,7 +98,14 @@ def dashboard_info(request):
             "clear_search_when_switching": request.user.clear_search_when_switching,
             "hosted": getattr(settings, "HOSTED", False),
             "date_format": request.user.date_format,
-            "default_date_format": get_core_settings().date_format,
+            "default_date_format": core_settings.date_format,
+            "token_is_expired": token_is_expired(),
+            "open_ai_integration_enabled": bool(core_settings.open_ai_token),
+            "dash_info_color": request.user.dash_info_color,
+            "dash_positive_color": request.user.dash_positive_color,
+            "dash_negative_color": request.user.dash_negative_color,
+            "dash_warning_color": request.user.dash_warning_color,
+            "run_cmd_placeholder_text": runcmd_placeholder_text(),
         }
     )
 
@@ -127,9 +140,7 @@ def server_maintenance(request):
         from autotasks.tasks import remove_orphaned_win_tasks
 
         remove_orphaned_win_tasks.delay()
-        return Response(
-            "The task has been initiated. Check the Debug Log in the UI for progress."
-        )
+        return Response("The task has been initiated.")
 
     if request.data["action"] == "prune_db":
         from logs.models import AuditLog, PendingAction
@@ -175,8 +186,8 @@ class GetAddCustomFields(APIView):
         if "model" in request.data.keys():
             fields = CustomField.objects.filter(model=request.data["model"])
             return Response(CustomFieldSerializer(fields, many=True).data)
-        else:
-            return notify_error("The request was invalid")
+
+        return notify_error("The request was invalid")
 
     def post(self, request):
         serializer = CustomFieldSerializer(data=request.data, partial=True)
@@ -231,7 +242,7 @@ class CodeSign(APIView):
         except Exception as e:
             return notify_error(str(e))
 
-        if r.status_code == 400 or r.status_code == 401:
+        if r.status_code in (400, 401):
             return notify_error(r.json()["ret"])
         elif r.status_code == 200:
             t = CodeSignToken.objects.first()
@@ -389,7 +400,6 @@ class TwilioSMSTest(APIView):
     permission_classes = [IsAuthenticated, CoreSettingsPerms]
 
     def post(self, request):
-
         core = get_core_settings()
         if not core.sms_is_configured:
             return notify_error(
@@ -406,7 +416,6 @@ class TwilioSMSTest(APIView):
 @csrf_exempt
 @monitoring_view
 def status(request):
-
     from agents.models import Agent
     from clients.models import Client, Site
 
@@ -414,11 +423,10 @@ def status(request):
     mem_usage: int = round(psutil.virtual_memory().percent)
 
     cert_file, _ = get_certs()
-    with open(cert_file, "rb") as f:
-        cert_bytes = f.read()
+    cert_bytes = Path(cert_file).read_bytes()
 
     cert = x509.load_pem_x509_certificate(cert_bytes)
-    expires = pytz.utc.localize(cert.not_valid_after)
+    expires = cert.not_valid_after.replace(tzinfo=ZoneInfo("UTC"))
     now = djangotime.now()
     delta = expires - now
 
@@ -451,3 +459,55 @@ def status(request):
             "nginx": sysd_svc_is_running("nginx.service"),
         }
     return JsonResponse(ret, json_dumps_params={"indent": 2})
+
+
+class OpenAICodeCompletion(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request: Request) -> Response:
+        settings = get_core_settings()
+
+        if not settings.open_ai_token:
+            return notify_error(
+                "Open AI API Key not found. Open Global Settings > Open AI."
+            )
+
+        if not request.data["prompt"]:
+            return notify_error("Not prompt field found")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {settings.open_ai_token}",
+        }
+
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": request.data["prompt"],
+                },
+            ],
+            "model": settings.open_ai_model,
+            "temperature": 0.5,
+            "max_tokens": 1000,
+            "n": 1,
+            "stop": None,
+        }
+
+        try:
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                data=json.dumps(data),
+            )
+        except Exception as e:
+            return notify_error(str(e))
+
+        response_data = json.loads(response.text)
+
+        if "error" in response_data:
+            return notify_error(
+                f"The Open AI API returned an error: {response_data['error']['message']}"
+            )
+
+        return Response(response_data["choices"][0]["message"]["content"])

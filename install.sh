@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-SCRIPT_VERSION="66"
+SCRIPT_VERSION="73"
 SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/install.sh'
 
 sudo apt install -y curl wget dirmngr gnupg lsb-release
@@ -12,25 +12,38 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SCRIPTS_DIR='/opt/trmm-community-scripts'
-PYTHON_VER='3.10.4'
+PYTHON_VER='3.11.3'
 SETTINGS_FILE='/rmm/api/tacticalrmm/tacticalrmm/settings.py'
 
 TMP_FILE=$(mktemp -p "" "rmminstall_XXXXXXXXXX")
-curl -s -L "${SCRIPT_URL}" > ${TMP_FILE}
+curl -s -L "${SCRIPT_URL}" >${TMP_FILE}
 NEW_VER=$(grep "^SCRIPT_VERSION" "$TMP_FILE" | awk -F'[="]' '{print $3}')
 
 if [ "${SCRIPT_VERSION}" -ne "${NEW_VER}" ]; then
-    printf >&2 "${YELLOW}Old install script detected, downloading and replacing with the latest version...${NC}\n"
-    wget -q "${SCRIPT_URL}" -O install.sh
-    printf >&2 "${YELLOW}Script updated! Please re-run ./install.sh${NC}\n"
-    rm -f $TMP_FILE
-    exit 1
+  printf >&2 "${YELLOW}Old install script detected, downloading and replacing with the latest version...${NC}\n"
+  wget -q "${SCRIPT_URL}" -O install.sh
+  printf >&2 "${YELLOW}Script updated! Please re-run ./install.sh${NC}\n"
+  rm -f $TMP_FILE
+  exit 1
 fi
 
 rm -f $TMP_FILE
 
-osname=$(lsb_release -si); osname=${osname^}
-osname=$(echo "$osname" | tr  '[A-Z]' '[a-z]')
+arch=$(uname -m)
+if [ "$arch" != "x86_64" ]; then
+  echo -ne "${RED}ERROR: Only x86_64 arch is supported, not ${arch}${NC}\n"
+  exit 1
+fi
+
+memTotal=$(grep -i memtotal /proc/meminfo | awk '{print $2}')
+if [[ $memTotal -lt 3627528 ]]; then
+  echo -ne "${RED}ERROR: A minimum of 4GB of RAM is required.${NC}\n"
+  exit 1
+fi
+
+osname=$(lsb_release -si)
+osname=${osname^}
+osname=$(echo "$osname" | tr '[A-Z]' '[a-z]')
 fullrel=$(lsb_release -sd)
 codename=$(lsb_release -sc)
 relno=$(lsb_release -sr | cut -d. -f1)
@@ -42,15 +55,14 @@ if [ ! "$osname" = "ubuntu" ] && [ ! "$osname" = "debian" ]; then
   osname=${osname^}
 fi
 
-
 # determine system
 if ([ "$osname" = "ubuntu" ] && [ "$fullrelno" = "20.04" ]) || ([ "$osname" = "debian" ] && [ $relno -ge 10 ]); then
   echo $fullrel
 else
- echo $fullrel
- echo -ne "${RED}Supported versions: Ubuntu 20.04, Debian 10 and 11\n"
- echo -ne "Your system does not appear to be supported${NC}\n"
- exit 1
+  echo $fullrel
+  echo -ne "${RED}Supported versions: Ubuntu 20.04, Debian 10 and 11\n"
+  echo -ne "Your system does not appear to be supported${NC}\n"
+  exit 1
 fi
 
 if [ $EUID -eq 0 ]; then
@@ -77,7 +89,6 @@ fi
 
 postgresql_repo="deb [arch=amd64] https://apt.postgresql.org/pub/repos/apt/ $codename-pgdg main"
 
-
 # prevents logging issues with some VPS providers like Vultr if this is a freshly provisioned instance that hasn't been rebooted yet
 sudo systemctl restart systemd-journald.service
 
@@ -102,31 +113,27 @@ print_green() {
 
 cls
 
-while [[ $rmmdomain != *[.]*[.]* ]]
-do
-echo -ne "${YELLOW}Enter the subdomain for the backend (e.g. api.example.com)${NC}: "
-read rmmdomain
+while [[ $rmmdomain != *[.]*[.]* ]]; do
+  echo -ne "${YELLOW}Enter the subdomain for the backend (e.g. api.example.com)${NC}: "
+  read rmmdomain
 done
 
-while [[ $frontenddomain != *[.]*[.]* ]]
-do
-echo -ne "${YELLOW}Enter the subdomain for the frontend (e.g. rmm.example.com)${NC}: "
-read frontenddomain
+while [[ $frontenddomain != *[.]*[.]* ]]; do
+  echo -ne "${YELLOW}Enter the subdomain for the frontend (e.g. rmm.example.com)${NC}: "
+  read frontenddomain
 done
 
-while [[ $meshdomain != *[.]*[.]* ]]
-do
-echo -ne "${YELLOW}Enter the subdomain for meshcentral (e.g. mesh.example.com)${NC}: "
-read meshdomain
+while [[ $meshdomain != *[.]*[.]* ]]; do
+  echo -ne "${YELLOW}Enter the subdomain for meshcentral (e.g. mesh.example.com)${NC}: "
+  read meshdomain
 done
 
 echo -ne "${YELLOW}Enter the root domain (e.g. example.com or example.co.uk)${NC}: "
 read rootdomain
 
-while [[ $letsemail != *[@]*[.]* ]]
-do
-echo -ne "${YELLOW}Enter a valid email address for django and meshcentral${NC}: "
-read letsemail
+while [[ $letsemail != *[@]*[.]* ]]; do
+  echo -ne "${YELLOW}Enter a valid email address for django and meshcentral${NC}: "
+  read letsemail
 done
 
 # if server is behind NAT we need to add the 3 subdomains to the host file
@@ -142,14 +149,14 @@ if ! [[ $CHECK_HOSTS ]]; then
   if [[ $HAS_11 ]]; then
     sudo sed -i "/127.0.1.1/s/$/ ${rmmdomain} ${frontenddomain} ${meshdomain}/" /etc/hosts
   else
-    echo "127.0.1.1 ${rmmdomain} ${frontenddomain} ${meshdomain}" | sudo tee --append /etc/hosts > /dev/null
+    echo "127.0.1.1 ${rmmdomain} ${frontenddomain} ${meshdomain}" | sudo tee --append /etc/hosts >/dev/null
   fi
 fi
 
 BEHIND_NAT=false
 IPV4=$(ip -4 addr | sed -ne 's|^.* inet \([^/]*\)/.* scope global.*$|\1|p' | head -1)
 if echo "$IPV4" | grep -qE '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192\.168)'; then
-    BEHIND_NAT=true
+  BEHIND_NAT=true
 fi
 
 sudo apt install -y software-properties-common
@@ -159,27 +166,26 @@ sudo apt install -y certbot openssl
 print_green 'Getting wildcard cert'
 
 sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
-while [[ $? -ne 0 ]]
-do
-sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
+while [[ $? -ne 0 ]]; do
+  sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
 done
 
 CERT_PRIV_KEY=/etc/letsencrypt/live/${rootdomain}/privkey.pem
 CERT_PUB_KEY=/etc/letsencrypt/live/${rootdomain}/fullchain.pem
 
 sudo chown ${USER}:${USER} -R /etc/letsencrypt
-sudo chmod 775 -R /etc/letsencrypt
 
 print_green 'Installing Nginx'
 
 wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo apt-key add -
 
-nginxrepo="$(cat << EOF
+nginxrepo="$(
+  cat <<EOF
 deb https://nginx.org/packages/$osname/ $codename nginx
 deb-src https://nginx.org/packages/$osname/ $codename nginx
 EOF
 )"
-echo "${nginxrepo}" | sudo tee /etc/apt/sources.list.d/nginx.list > /dev/null
+echo "${nginxrepo}" | sudo tee /etc/apt/sources.list.d/nginx.list >/dev/null
 
 sudo apt update
 sudo apt install -y nginx
@@ -187,7 +193,8 @@ sudo systemctl stop nginx
 
 nginxdefaultconf='/etc/nginx/nginx.conf'
 
-nginxconf="$(cat << EOF
+nginxconf="$(
+  cat <<EOF
 worker_rlimit_nofile 1000000;
 user www-data;
 worker_processes auto;
@@ -215,11 +222,10 @@ http {
 }
 EOF
 )"
-echo "${nginxconf}" | sudo tee $nginxdefaultconf > /dev/null
+echo "${nginxconf}" | sudo tee $nginxdefaultconf >/dev/null
 
-for i in sites-available sites-enabled
-do
-sudo mkdir -p /etc/nginx/$i
+for i in sites-available sites-enabled; do
+  sudo mkdir -p /etc/nginx/$i
 done
 
 print_green 'Installing NodeJS'
@@ -253,7 +259,6 @@ sudo make altinstall
 cd ~
 sudo rm -rf Python-${PYTHON_VER} Python-${PYTHON_VER}.tgz
 
-
 print_green 'Installing redis and git'
 sudo apt install -y ca-certificates redis git
 
@@ -265,9 +270,12 @@ wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-
 sudo apt update
 sudo apt install -y postgresql-14
 sleep 2
-sudo systemctl enable postgresql
-sudo systemctl restart postgresql
-sleep 5
+sudo systemctl enable --now postgresql
+
+until pg_isready >/dev/null; do
+  echo -ne "${GREEN}Waiting for PostgreSQL to be ready${NC}\n"
+  sleep 3
+done
 
 print_green 'Creating database for the rmm'
 
@@ -319,46 +327,48 @@ cd /meshcentral
 npm install meshcentral@${MESH_VER}
 sudo chown ${USER}:${USER} -R /meshcentral
 
-meshcfg="$(cat << EOF
+meshcfg="$(
+  cat <<EOF
 {
   "settings": {
-    "Cert": "${meshdomain}",
-    "MongoDb": "mongodb://127.0.0.1:27017",
-    "MongoDbName": "meshcentral",
+    "cert": "${meshdomain}",
+    "mongoDb": "mongodb://127.0.0.1:27017",
+    "mongoDbName": "meshcentral",
     "WANonly": true,
-    "Minify": 1,
-    "Port": 4430,
-    "AliasPort": 443,
-    "RedirPort": 800,
-    "AllowLoginToken": true,
-    "AllowFraming": true,
-    "_AgentPing": 60,
-    "AgentPong": 300,
-    "AllowHighQualityDesktop": true,
-    "TlsOffload": "127.0.0.1",
+    "minify": 1,
+    "port": 4430,
+    "aliasPort": 443,
+    "redirPort": 800,
+    "allowLoginToken": true,
+    "allowFraming": true,
+    "_agentPing": 60,
+    "agentPong": 300,
+    "allowHighQualityDesktop": true,
+    "tlsOffload": "127.0.0.1",
     "agentCoreDump": false,
-    "Compression": true,
-    "WsCompression": true,
-    "AgentWsCompression": true,
-    "MaxInvalidLogin": { "time": 5, "count": 5, "coolofftime": 30 }
+    "compression": true,
+    "wsCompression": true,
+    "agentWsCompression": true,
+    "maxInvalidLogin": { "time": 5, "count": 5, "coolofftime": 30 }
   },
   "domains": {
     "": {
-      "Title": "Tactical RMM",
-      "Title2": "Tactical RMM",
-      "NewAccounts": false,
-      "CertUrl": "https://${meshdomain}:443/",
-      "GeoLocation": true,
-      "CookieIpCheck": false,
+      "title": "Tactical RMM",
+      "title2": "Tactical RMM",
+      "newAccounts": false,
+      "certUrl": "https://${meshdomain}:443/",
+      "geoLocation": true,
+      "cookieIpCheck": false,
       "mstsc": true
     }
   }
 }
 EOF
 )"
-echo "${meshcfg}" > /meshcentral/meshcentral-data/config.json
+echo "${meshcfg}" >/meshcentral/meshcentral-data/config.json
 
-localvars="$(cat << EOF
+localvars="$(
+  cat <<EOF
 SECRET_KEY = "${DJANGO_SEKRET}"
 
 DEBUG = False
@@ -388,7 +398,7 @@ REDIS_HOST    = "localhost"
 ADMIN_ENABLED = True
 EOF
 )"
-echo "${localvars}" > /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+echo "${localvars}" >/rmm/api/tacticalrmm/tacticalrmm/local_settings.py
 
 sudo cp /rmm/natsapi/bin/nats-api /usr/local/bin
 sudo chown ${USER}:${USER} /usr/local/bin/nats-api
@@ -400,7 +410,7 @@ SETUPTOOLS_VER=$(grep "^SETUPTOOLS_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print
 WHEEL_VER=$(grep "^WHEEL_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print $5}')
 
 cd /rmm/api
-python3.10 -m venv env
+python3.11 -m venv env
 source /rmm/api/env/bin/activate
 cd /rmm/api/tacticalrmm
 pip install --no-cache-dir --upgrade pip
@@ -409,6 +419,7 @@ pip install --no-cache-dir -r /rmm/api/tacticalrmm/requirements.txt
 python manage.py migrate
 python manage.py collectstatic --no-input
 python manage.py create_natsapi_conf
+python manage.py create_uwsgi_conf
 python manage.py load_chocos
 python manage.py load_community_scripts
 WEB_VERSION=$(python manage.py get_config webversion)
@@ -427,37 +438,8 @@ python manage.py generate_barcode ${RANDBASE} ${djangousername} ${frontenddomain
 deactivate
 read -n 1 -s -r -p "Press any key to continue..."
 
-uwsgini="$(cat << EOF
-[uwsgi]
-chdir = /rmm/api/tacticalrmm
-module = tacticalrmm.wsgi
-home = /rmm/api/env
-master = true
-enable-threads = true
-socket = /rmm/api/tacticalrmm/tacticalrmm.sock
-harakiri = 300
-chmod-socket = 660
-buffer-size = 65535
-vacuum = true
-die-on-term = true
-max-requests = 500
-disable-logging = true
-cheaper-algo = busyness
-cheaper = 4
-cheaper-initial = 4
-workers = 20
-cheaper-step = 2
-cheaper-overload = 3
-cheaper-busyness-min = 5
-cheaper-busyness-max = 10
-# stats = /tmp/stats.socket # uncomment when debugging
-# cheaper-busyness-verbose = true # uncomment when debugging
-EOF
-)"
-echo "${uwsgini}" > /rmm/api/tacticalrmm/app.ini
-
-
-rmmservice="$(cat << EOF
+rmmservice="$(
+  cat <<EOF
 [Unit]
 Description=tacticalrmm uwsgi daemon
 After=network.target postgresql.service
@@ -475,11 +457,12 @@ RestartSec=10s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${rmmservice}" | sudo tee /etc/systemd/system/rmm.service > /dev/null
+echo "${rmmservice}" | sudo tee /etc/systemd/system/rmm.service >/dev/null
 
-daphneservice="$(cat << EOF
+daphneservice="$(
+  cat <<EOF
 [Unit]
-Description=django channels daemon
+Description=django channels daemon v2
 After=network.target
 
 [Service]
@@ -488,6 +471,8 @@ Group=www-data
 WorkingDirectory=/rmm/api/tacticalrmm
 Environment="PATH=/rmm/api/env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ExecStart=/rmm/api/env/bin/daphne -u /rmm/daphne.sock tacticalrmm.asgi:application
+ExecStartPre=rm -f /rmm/daphne.sock
+ExecStartPre=rm -f /rmm/daphne.sock.lock
 Restart=always
 RestartSec=3s
 
@@ -495,9 +480,10 @@ RestartSec=3s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${daphneservice}" | sudo tee /etc/systemd/system/daphne.service > /dev/null
+echo "${daphneservice}" | sudo tee /etc/systemd/system/daphne.service >/dev/null
 
-natsservice="$(cat << EOF
+natsservice="$(
+  cat <<EOF
 [Unit]
 Description=NATS Server
 After=network.target
@@ -518,9 +504,10 @@ LimitNOFILE=1000000
 WantedBy=multi-user.target
 EOF
 )"
-echo "${natsservice}" | sudo tee /etc/systemd/system/nats.service > /dev/null
+echo "${natsservice}" | sudo tee /etc/systemd/system/nats.service >/dev/null
 
-natsapi="$(cat << EOF
+natsapi="$(
+  cat <<EOF
 [Unit]
 Description=TacticalRMM Nats Api v1
 After=nats.service
@@ -537,9 +524,10 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${natsapi}" | sudo tee /etc/systemd/system/nats-api.service > /dev/null
+echo "${natsapi}" | sudo tee /etc/systemd/system/nats-api.service >/dev/null
 
-nginxrmm="$(cat << EOF
+nginxrmm="$(
+  cat <<EOF
 server_tokens off;
 
 upstream tacticalrmm {
@@ -622,10 +610,10 @@ server {
 }
 EOF
 )"
-echo "${nginxrmm}" | sudo tee /etc/nginx/sites-available/rmm.conf > /dev/null
+echo "${nginxrmm}" | sudo tee /etc/nginx/sites-available/rmm.conf >/dev/null
 
-
-nginxmesh="$(cat << EOF
+nginxmesh="$(
+  cat <<EOF
 server {
   listen 80;
   listen [::]:80;
@@ -667,14 +655,15 @@ server {
 }
 EOF
 )"
-echo "${nginxmesh}" | sudo tee /etc/nginx/sites-available/meshcentral.conf > /dev/null
+echo "${nginxmesh}" | sudo tee /etc/nginx/sites-available/meshcentral.conf >/dev/null
 
 sudo ln -s /etc/nginx/sites-available/rmm.conf /etc/nginx/sites-enabled/rmm.conf
 sudo ln -s /etc/nginx/sites-available/meshcentral.conf /etc/nginx/sites-enabled/meshcentral.conf
 
 sudo mkdir /etc/conf.d
 
-celeryservice="$(cat << EOF
+celeryservice="$(
+  cat <<EOF
 [Unit]
 Description=Celery Service V2
 After=network.target redis-server.service postgresql.service
@@ -695,9 +684,10 @@ RestartSec=10s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${celeryservice}" | sudo tee /etc/systemd/system/celery.service > /dev/null
+echo "${celeryservice}" | sudo tee /etc/systemd/system/celery.service >/dev/null
 
-celeryconf="$(cat << EOF
+celeryconf="$(
+  cat <<EOF
 CELERYD_NODES="w1"
 
 CELERY_BIN="/rmm/api/env/bin/celery"
@@ -716,10 +706,10 @@ CELERYBEAT_PID_FILE="/rmm/api/tacticalrmm/beat.pid"
 CELERYBEAT_LOG_FILE="/var/log/celery/beat.log"
 EOF
 )"
-echo "${celeryconf}" | sudo tee /etc/conf.d/celery.conf > /dev/null
+echo "${celeryconf}" | sudo tee /etc/conf.d/celery.conf >/dev/null
 
-
-celerybeatservice="$(cat << EOF
+celerybeatservice="$(
+  cat <<EOF
 [Unit]
 Description=Celery Beat Service V2
 After=network.target redis-server.service postgresql.service
@@ -738,11 +728,12 @@ RestartSec=10s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${celerybeatservice}" | sudo tee /etc/systemd/system/celerybeat.service > /dev/null
+echo "${celerybeatservice}" | sudo tee /etc/systemd/system/celerybeat.service >/dev/null
 
 sudo chown ${USER}:${USER} -R /etc/conf.d/
 
-meshservice="$(cat << EOF
+meshservice="$(
+  cat <<EOF
 [Unit]
 Description=MeshCentral Server
 After=network.target mongod.service nginx.service
@@ -761,7 +752,7 @@ RestartSec=10s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${meshservice}" | sudo tee /etc/systemd/system/meshcentral.service > /dev/null
+echo "${meshservice}" | sudo tee /etc/systemd/system/meshcentral.service >/dev/null
 
 sudo systemctl daemon-reload
 
@@ -779,11 +770,12 @@ webtar="trmm-web-v${WEB_VERSION}.tar.gz"
 wget -q https://github.com/amidaware/tacticalrmm-web/releases/download/v${WEB_VERSION}/${webtar} -O /tmp/${webtar}
 sudo mkdir -p /var/www/rmm
 sudo tar -xzf /tmp/${webtar} -C /var/www/rmm
-echo "window._env_ = {PROD_URL: \"https://${rmmdomain}\"}" | sudo tee /var/www/rmm/dist/env-config.js > /dev/null
+echo "window._env_ = {PROD_URL: \"https://${rmmdomain}\"}" | sudo tee /var/www/rmm/dist/env-config.js >/dev/null
 sudo chown www-data:www-data -R /var/www/rmm/dist
 rm -f /tmp/${webtar}
 
-nginxfrontend="$(cat << EOF
+nginxfrontend="$(
+  cat <<EOF
 server {
     server_name ${frontenddomain};
     charset utf-8;
@@ -822,15 +814,13 @@ server {
 }
 EOF
 )"
-echo "${nginxfrontend}" | sudo tee /etc/nginx/sites-available/frontend.conf > /dev/null
+echo "${nginxfrontend}" | sudo tee /etc/nginx/sites-available/frontend.conf >/dev/null
 
 sudo ln -s /etc/nginx/sites-available/frontend.conf /etc/nginx/sites-enabled/frontend.conf
 
-
 print_green 'Enabling Services'
 
-for i in rmm.service daphne.service celery.service celerybeat.service nginx
-do
+for i in rmm.service daphne.service celery.service celerybeat.service nginx; do
   sudo systemctl enable ${i}
   sudo systemctl stop ${i}
   sudo systemctl start ${i}
@@ -857,12 +847,12 @@ print_green 'Generating meshcentral login token key'
 
 MESHTOKENKEY=$(node /meshcentral/node_modules/meshcentral --logintokenkey)
 
-meshtoken="$(cat << EOF
+meshtoken="$(
+  cat <<EOF
 MESH_TOKEN_KEY = "${MESHTOKENKEY}"
 EOF
 )"
-echo "${meshtoken}" | tee --append /rmm/api/tacticalrmm/tacticalrmm/local_settings.py > /dev/null
-
+echo "${meshtoken}" | tee --append /rmm/api/tacticalrmm/tacticalrmm/local_settings.py >/dev/null
 
 print_green 'Creating meshcentral account and group'
 
@@ -902,8 +892,7 @@ sudo systemctl start nats-api.service
 sed -i 's/ADMIN_ENABLED = True/ADMIN_ENABLED = False/g' /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
 
 print_green 'Restarting services'
-for i in rmm.service daphne.service celery.service celerybeat.service
-do
+for i in rmm.service daphne.service celery.service celerybeat.service; do
   sudo systemctl stop ${i}
   sudo systemctl start ${i}
 done
@@ -917,13 +906,12 @@ printf >&2 "${YELLOW}MeshCentral username: ${GREEN}${meshusername}${NC}\n"
 printf >&2 "${YELLOW}MeshCentral password: ${GREEN}${MESHPASSWD}${NC}\n\n"
 
 if [ "$BEHIND_NAT" = true ]; then
-    echo -ne "${YELLOW}Read below if your router does NOT support Hairpin NAT${NC}\n\n"
-    echo -ne "${GREEN}If you will be accessing the web interface of the RMM from the same LAN as this server,${NC}\n"
-    echo -ne "${GREEN}you'll need to make sure your 3 subdomains resolve to ${IPV4}${NC}\n"
-    echo -ne "${GREEN}This also applies to any agents that will be on the same local network as the rmm.${NC}\n"
-    echo -ne "${GREEN}You'll also need to setup port forwarding in your router on port 443${NC}\n\n"
+  echo -ne "${YELLOW}Read below if your router does NOT support Hairpin NAT${NC}\n\n"
+  echo -ne "${GREEN}If you will be accessing the web interface of the RMM from the same LAN as this server,${NC}\n"
+  echo -ne "${GREEN}you'll need to make sure your 3 subdomains resolve to ${IPV4}${NC}\n"
+  echo -ne "${GREEN}This also applies to any agents that will be on the same local network as the rmm.${NC}\n"
+  echo -ne "${GREEN}You'll also need to setup port forwarding in your router on port 443${NC}\n\n"
 fi
 
-printf >&2 "${YELLOW}Please refer to the github README for next steps${NC}\n\n"
 printf >&2 "${YELLOW}%0.s*${NC}" {1..80}
 printf >&2 "\n"

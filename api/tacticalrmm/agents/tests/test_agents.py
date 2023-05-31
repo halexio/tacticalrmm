@@ -3,8 +3,8 @@ import os
 from itertools import cycle
 from typing import TYPE_CHECKING
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
-import pytz
 from django.conf import settings
 from django.utils import timezone as djangotime
 from model_bakery import baker
@@ -403,6 +403,7 @@ class TestAgentViews(TacticalTestCase):
             "cmd": "ipconfig",
             "shell": "cmd",
             "timeout": 30,
+            "run_as_user": False,
         }
         mock_ret.return_value = "nt authority\\system"
         r = self.client.post(url, data, format="json")
@@ -421,13 +422,13 @@ class TestAgentViews(TacticalTestCase):
         url = f"{base_url}/{self.agent.agent_id}/reboot/"
 
         # ensure we don't allow dates in past
-        data = {"datetime": "2022-07-11T01:51:11"}
+        data = {"datetime": "2022-07-11T01:51"}
         r = self.client.patch(url, data, format="json")
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.data, "Date cannot be set in the past")
 
         # test with date in future
-        data["datetime"] = "2027-08-29T18:41:02"
+        data["datetime"] = "2027-08-29T18:41"
         r = self.client.patch(url, data, format="json")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data["time"], "August 29, 2027 at 06:41 PM")
@@ -538,6 +539,8 @@ class TestAgentViews(TacticalTestCase):
             "output": "wait",
             "args": [],
             "timeout": 15,
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -547,7 +550,13 @@ class TestAgentViews(TacticalTestCase):
             raise AgentHistory.DoesNotExist
 
         run_script.assert_called_with(
-            scriptpk=script.pk, args=[], timeout=18, wait=True, history_pk=hist.pk
+            scriptpk=script.pk,
+            args=[],
+            timeout=18,
+            wait=True,
+            history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -559,15 +568,21 @@ class TestAgentViews(TacticalTestCase):
             "timeout": 15,
             "emailMode": "default",
             "emails": ["admin@example.com", "bob@example.com"],
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
         r = self.client.post(url, data, format="json")
         self.assertEqual(r.status_code, 200)
+        hist = AgentHistory.objects.filter(agent=self.agent, script=script).last()
         email_task.assert_called_with(
             agentpk=self.agent.pk,
             scriptpk=script.pk,
             nats_timeout=18,
             emails=[],
             args=["abc", "123"],
+            history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         email_task.reset_mock()
 
@@ -575,12 +590,16 @@ class TestAgentViews(TacticalTestCase):
         data["emailMode"] = "custom"
         r = self.client.post(url, data, format="json")
         self.assertEqual(r.status_code, 200)
+        hist = AgentHistory.objects.filter(agent=self.agent, script=script).last()
         email_task.assert_called_with(
             agentpk=self.agent.pk,
             scriptpk=script.pk,
             nats_timeout=18,
             emails=["admin@example.com", "bob@example.com"],
             args=["abc", "123"],
+            history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
 
         # test fire and forget
@@ -589,6 +608,8 @@ class TestAgentViews(TacticalTestCase):
             "output": "forget",
             "args": ["hello", "world"],
             "timeout": 22,
+            "run_as_user": True,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -598,7 +619,12 @@ class TestAgentViews(TacticalTestCase):
             raise AgentHistory.DoesNotExist
 
         run_script.assert_called_with(
-            scriptpk=script.pk, args=["hello", "world"], timeout=25, history_pk=hist.pk
+            scriptpk=script.pk,
+            args=["hello", "world"],
+            timeout=25,
+            history_pk=hist.pk,
+            run_as_user=True,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -613,6 +639,8 @@ class TestAgentViews(TacticalTestCase):
             "timeout": 22,
             "custom_field": custom_field.pk,
             "save_all_output": True,
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -627,6 +655,8 @@ class TestAgentViews(TacticalTestCase):
             timeout=25,
             wait=True,
             history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -644,6 +674,8 @@ class TestAgentViews(TacticalTestCase):
             "timeout": 22,
             "custom_field": custom_field.pk,
             "save_all_output": False,
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -658,6 +690,8 @@ class TestAgentViews(TacticalTestCase):
             timeout=25,
             wait=True,
             history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -677,6 +711,8 @@ class TestAgentViews(TacticalTestCase):
             "timeout": 22,
             "custom_field": custom_field.pk,
             "save_all_output": False,
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -691,6 +727,8 @@ class TestAgentViews(TacticalTestCase):
             timeout=25,
             wait=True,
             history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -707,6 +745,8 @@ class TestAgentViews(TacticalTestCase):
             "output": "note",
             "args": ["hello", "world"],
             "timeout": 22,
+            "run_as_user": False,
+            "env_vars": ["hello=world", "foo=bar"],
         }
 
         r = self.client.post(url, data, format="json")
@@ -721,6 +761,8 @@ class TestAgentViews(TacticalTestCase):
             timeout=25,
             wait=True,
             history_pk=hist.pk,
+            run_as_user=False,
+            env_vars=["hello=world", "foo=bar"],
         )
         run_script.reset_mock()
 
@@ -813,7 +855,6 @@ class TestAgentViews(TacticalTestCase):
         self.check_not_authenticated("delete", url)
 
     def test_get_agent_history(self):
-
         # setup data
         agent = baker.make_recipe("agents.agent")
         history = baker.make("agents.AgentHistory", agent=agent, _quantity=30)
@@ -825,7 +866,7 @@ class TestAgentViews(TacticalTestCase):
 
         # test pulling data
         r = self.client.get(url, format="json")
-        ctx = {"default_tz": pytz.timezone("America/Los_Angeles")}
+        ctx = {"default_tz": ZoneInfo("America/Los_Angeles")}
         data = AgentHistorySerializer(history, many=True, context=ctx).data
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.data, data)  # type:ignore
@@ -969,7 +1010,6 @@ class TestAgentPermissions(TacticalTestCase):
     @patch("time.sleep")
     @patch("agents.models.Agent.nats_cmd", return_value="ok")
     def test_agent_actions_permissions(self, nats_cmd, sleep):
-
         agent = baker.make_recipe("agents.agent")
         unauthorized_agent = baker.make_recipe("agents.agent")
 
@@ -1097,7 +1137,6 @@ class TestAgentPermissions(TacticalTestCase):
         self.assertEqual(len(response.data["agents"]), 7)
 
     def test_generating_agent_installer_permissions(self):
-
         client = baker.make("clients.Client")
         client_site = baker.make("clients.Site", client=client)
         site = baker.make("clients.Site")
@@ -1160,7 +1199,6 @@ class TestAgentPermissions(TacticalTestCase):
         self.check_not_authorized("post", url, data)
 
     def test_agent_notes_permissions(self):
-
         agent = baker.make_recipe("agents.agent")
         notes = baker.make("agents.Note", agent=agent, _quantity=5)
 
@@ -1249,9 +1287,9 @@ class TestAgentPermissions(TacticalTestCase):
 
         sites = baker.make("clients.Site", _quantity=2)
         agent = baker.make_recipe("agents.agent", site=sites[0])
-        history = baker.make("agents.AgentHistory", agent=agent, _quantity=5)
+        history = baker.make("agents.AgentHistory", agent=agent, _quantity=5)  # noqa
         unauthorized_agent = baker.make_recipe("agents.agent", site=sites[1])
-        unauthorized_history = baker.make(
+        unauthorized_history = baker.make(  # noqa
             "agents.AgentHistory", agent=unauthorized_agent, _quantity=6
         )
 

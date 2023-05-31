@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import suppress
 
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
@@ -8,11 +9,11 @@ from django.utils import timezone as djangotime
 
 from agents.models import Agent
 from tacticalrmm.constants import AgentMonType
+from tacticalrmm.helpers import days_until_cert_expires
 
 
 class DashInfo(AsyncJsonWebsocketConsumer):
     async def connect(self):
-
         self.user = self.scope["user"]
 
         if isinstance(self.user, AnonymousUser):
@@ -23,16 +24,12 @@ class DashInfo(AsyncJsonWebsocketConsumer):
         self.dash_info = asyncio.create_task(self.send_dash_info())
 
     async def disconnect(self, close_code):
-
-        try:
+        with suppress(Exception):
             self.dash_info.cancel()
-        except:
-            pass
 
         self.connected = False
-        await self.close()
 
-    async def receive(self, json_data=None):
+    async def receive_json(self, payload, **kwargs):
         pass
 
     @database_sync_to_async
@@ -71,6 +68,7 @@ class DashInfo(AsyncJsonWebsocketConsumer):
             "total_workstation_offline_count": offline_workstation_agents_count,
             "total_server_count": total_server_agents_count,
             "total_workstation_count": total_workstation_agents_count,
+            "days_until_cert_expires": days_until_cert_expires(),
         }
 
     async def send_dash_info(self):
