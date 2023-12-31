@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from collections import Counter
 from contextlib import suppress
@@ -7,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Union, ca
 import msgpack
 import nats
 import validators
-from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.postgres.fields import ArrayField
 from django.core.cache import cache
@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 
 # type helpers
 Disk = Union[Dict[str, Any], str]
+
+logger = logging.getLogger("trmm")
 
 
 class Agent(BaseAuditModel):
@@ -556,6 +558,7 @@ class Agent(BaseAuditModel):
             run_as_user = True
 
         parsed_args = script.parse_script_args(self, script.shell, args)
+        parsed_env_vars = script.parse_script_env_vars(self, script.shell, env_vars)
 
         data = {
             "func": "runscriptfull" if full else "runscript",
@@ -566,7 +569,7 @@ class Agent(BaseAuditModel):
                 "shell": script.shell,
             },
             "run_as_user": run_as_user,
-            "env_vars": env_vars,
+            "env_vars": parsed_env_vars,
         }
 
         if history_pk != 0:
@@ -797,9 +800,6 @@ class Agent(BaseAuditModel):
             cache.set(cache_key, tasks, 600)
             return tasks
 
-    def _do_nats_debug(self, agent: "Agent", message: str) -> None:
-        DebugLog.error(agent=agent, log_type=DebugLogType.AGENT_ISSUES, message=message)
-
     async def nats_cmd(
         self, data: Dict[Any, Any], timeout: int = 30, wait: bool = True
     ) -> Any:
@@ -821,9 +821,7 @@ class Agent(BaseAuditModel):
                     ret = msgpack.loads(msg.data)
                 except Exception as e:
                     ret = str(e)
-                    await sync_to_async(self._do_nats_debug, thread_sensitive=False)(
-                        agent=self, message=ret
-                    )
+                    logger.error(e)
 
             await nc.close()
             return ret
@@ -1010,6 +1008,9 @@ class AgentCustomField(models.Model):
         blank=True,
         default=list,
     )
+
+    class Meta:
+        unique_together = (("agent", "field"),)
 
     def __str__(self) -> str:
         return self.field.name

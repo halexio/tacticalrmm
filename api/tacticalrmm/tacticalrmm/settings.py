@@ -20,27 +20,27 @@ MAC_UNINSTALL = BASE_DIR / "core" / "mac_uninstall.sh"
 AUTH_USER_MODEL = "accounts.User"
 
 # latest release
-TRMM_VERSION = "0.15.12"
+TRMM_VERSION = "0.17.4-dev"
 
 # https://github.com/amidaware/tacticalrmm-web
-WEB_VERSION = "0.101.22"
+WEB_VERSION = "0.101.38"
 
 # bump this version everytime vue code is changed
 # to alert user they need to manually refresh their browser
-APP_VER = "0.0.181"
+APP_VER = "0.0.189"
 
 # https://github.com/amidaware/rmmagent
-LATEST_AGENT_VER = "2.4.9"
+LATEST_AGENT_VER = "2.6.1"
 
-MESH_VER = "1.1.4"
+MESH_VER = "1.1.9"
 
-NATS_SERVER_VER = "2.9.17"
+NATS_SERVER_VER = "2.10.7"
 
 # for the update script, bump when need to recreate venv
-PIP_VER = "36"
+PIP_VER = "41"
 
-SETUPTOOLS_VER = "67.6.1"
-WHEEL_VER = "0.40.0"
+SETUPTOOLS_VER = "69.0.2"
+WHEEL_VER = "0.42.0"
 
 AGENT_BASE_URL = "https://agents.tacticalrmm.com"
 
@@ -70,6 +70,7 @@ ADMIN_ENABLED = False
 HOSTED = False
 SWAGGER_ENABLED = False
 REDIS_HOST = "127.0.0.1"
+TRMM_LOG_LEVEL = "ERROR"
 
 with suppress(ImportError):
     from .local_settings import *  # noqa
@@ -77,6 +78,8 @@ with suppress(ImportError):
 CHECK_TOKEN_URL = f"{AGENT_BASE_URL}/api/v2/checktoken"
 AGENTS_URL = f"{AGENT_BASE_URL}/api/v2/agents/?"
 EXE_GEN_URL = f"{AGENT_BASE_URL}/api/v2/exe"
+REPORTING_CHECK_URL = f"{AGENT_BASE_URL}/api/v2/reporting/check"
+REPORTING_DL_URL = f"{AGENT_BASE_URL}/api/v2/reporting/download/?"
 
 if "GHACTIONS" in os.environ:
     DEBUG = False
@@ -106,7 +109,6 @@ if not DEBUG:
     )
 
 INSTALLED_APPS = [
-    "daphne",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
@@ -130,6 +132,7 @@ INSTALLED_APPS = [
     "logs",
     "scripts",
     "alerts",
+    "ee.reporting",
 ]
 
 CHANNEL_LAYERS = {
@@ -174,6 +177,7 @@ if SWAGGER_ENABLED:
     INSTALLED_APPS += ("drf_spectacular",)
 
 if DEBUG and not DEMO:
+    INSTALLED_APPS.insert(0, "daphne")
     INSTALLED_APPS += (
         "django_extensions",
         "silk",
@@ -228,12 +232,20 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+
+def get_log_level() -> str:
+    if "TRMM_LOG_LEVEL" in os.environ:
+        return os.getenv("TRMM_LOG_LEVEL")  # type: ignore
+
+    return TRMM_LOG_LEVEL
+
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
         "verbose": {
-            "format": "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)s] %(message)s",
+            "format": "[%(asctime)s] %(levelname)s [%(filename)s:%(funcName)s:%(lineno)d] %(message)s",
             "datefmt": "%d/%b/%Y %H:%M:%S",
         },
     },
@@ -243,10 +255,17 @@ LOGGING = {
             "class": "logging.FileHandler",
             "filename": os.path.join(LOG_DIR, "django_debug.log"),
             "formatter": "verbose",
-        }
+        },
+        "trmm": {
+            "level": get_log_level(),
+            "class": "logging.FileHandler",
+            "filename": os.path.join(LOG_DIR, "trmm_debug.log"),
+            "formatter": "verbose",
+        },
     },
     "loggers": {
-        "django.request": {"handlers": ["file"], "level": "ERROR", "propagate": True}
+        "django.request": {"handlers": ["file"], "level": "ERROR", "propagate": True},
+        "trmm": {"handlers": ["trmm"], "level": get_log_level(), "propagate": False},
     },
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-SCRIPT_VERSION="144"
+SCRIPT_VERSION="151"
 SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/update.sh'
 LATEST_SETTINGS_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/api/tacticalrmm/tacticalrmm/settings.py'
 YELLOW='\033[1;33m'
@@ -10,7 +10,7 @@ NC='\033[0m'
 THIS_SCRIPT=$(readlink -f "$0")
 
 SCRIPTS_DIR='/opt/trmm-community-scripts'
-PYTHON_VER='3.11.3'
+PYTHON_VER='3.11.6'
 SETTINGS_FILE='/rmm/api/tacticalrmm/tacticalrmm/settings.py'
 
 TMP_FILE=$(mktemp -p "" "rmmupdate_XXXXXXXXXX")
@@ -67,6 +67,10 @@ cls() {
   printf "\033c"
 }
 
+if [ ! -d /etc/apt/keyrings ]; then
+  sudo mkdir -p /etc/apt/keyrings
+fi
+
 CHECK_NATS_LIMITNOFILE=$(grep LimitNOFILE /etc/systemd/system/nats.service)
 if ! [[ $CHECK_NATS_LIMITNOFILE ]]; then
 
@@ -98,28 +102,6 @@ EOF
   sudo systemctl daemon-reload
 fi
 
-rmmconf='/etc/nginx/sites-available/rmm.conf'
-CHECK_NATS_WEBSOCKET=$(grep natsws $rmmconf)
-if ! [[ $CHECK_NATS_WEBSOCKET ]]; then
-  echo "Adding nats websocket to nginx config"
-  echo "$(awk '
-  /location \/ {/ {
-      print "    location ~ ^/natsws {"
-      print "        proxy_pass http://127.0.0.1:9235;"
-      print "        proxy_http_version 1.1;"
-      print "        proxy_set_header Host $host;"
-      print "        proxy_set_header Upgrade $http_upgrade;"
-      print "        proxy_set_header Connection \"upgrade\";"
-      print "        proxy_set_header X-Forwarded-Host $host:$server_port;"
-      print "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;"
-      print "        proxy_set_header X-Forwarded-Proto $scheme;"
-      print "    }"
-      print "\n"
-  }
-  { print }
-  ' $rmmconf)" | sudo tee $rmmconf >/dev/null
-fi
-
 printf >&2 "${GREEN}Stopping celery and celerybeat services (this might take a while)...${NC}\n"
 for i in celerybeat celery; do
   sudo systemctl stop ${i}
@@ -130,15 +112,14 @@ for i in nginx nats-api nats rmm daphne; do
   sudo systemctl stop ${i}
 done
 
-CHECK_DAPHNE=$(grep v2 /etc/systemd/system/daphne.service)
-if ! [[ $CHECK_DAPHNE ]]; then
-
+# migrate daphne to uvicorn
+if ! grep -q uvicorn /etc/systemd/system/daphne.service; then
   sudo rm -f /etc/systemd/system/daphne.service
 
-  daphneservice="$(
+  uviservice="$(
     cat <<EOF
 [Unit]
-Description=django channels daemon v2
+Description=uvicorn daemon v1
 After=network.target
 
 [Service]
@@ -146,7 +127,7 @@ User=${USER}
 Group=www-data
 WorkingDirectory=/rmm/api/tacticalrmm
 Environment="PATH=/rmm/api/env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/rmm/api/env/bin/daphne -u /rmm/daphne.sock tacticalrmm.asgi:application
+ExecStart=/rmm/api/env/bin/uvicorn --uds /rmm/daphne.sock --forwarded-allow-ips='*' tacticalrmm.asgi:application
 ExecStartPre=rm -f /rmm/daphne.sock
 ExecStartPre=rm -f /rmm/daphne.sock.lock
 Restart=always
@@ -156,23 +137,36 @@ RestartSec=3s
 WantedBy=multi-user.target
 EOF
   )"
-  echo "${daphneservice}" | sudo tee /etc/systemd/system/daphne.service >/dev/null
+  echo "${uviservice}" | sudo tee /etc/systemd/system/daphne.service >/dev/null
   sudo systemctl daemon-reload
 fi
 
+osname=$(lsb_release -si)
+osname=${osname^}
+osname=$(echo "$osname" | tr '[A-Z]' '[a-z]')
+
+# for weasyprint
+if [[ "$osname" == "debian" ]]; then
+  count=$(dpkg -l | grep -E "libpango-1.0-0|libpangoft2-1.0-0" | wc -l)
+  if ! [ "$count" -eq 2 ]; then
+    sudo apt install -y libpango-1.0-0 libpangoft2-1.0-0
+  fi
+elif [[ "$osname" == "ubuntu" ]]; then
+  count=$(dpkg -l | grep -E "libpango-1.0-0|libharfbuzz0b|libpangoft2-1.0-0" | wc -l)
+  if ! [ "$count" -eq 3 ]; then
+    sudo apt install -y libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
+  fi
+fi
+
 if [ ! -f /etc/apt/sources.list.d/nginx.list ]; then
-  osname=$(lsb_release -si)
-  osname=${osname^}
-  osname=$(echo "$osname" | tr '[A-Z]' '[a-z]')
   codename=$(lsb_release -sc)
   nginxrepo="$(
     cat <<EOF
-deb https://nginx.org/packages/$osname/ $codename nginx
-deb-src https://nginx.org/packages/$osname/ $codename nginx
+deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/$osname $codename nginx
 EOF
   )"
   echo "${nginxrepo}" | sudo tee /etc/apt/sources.list.d/nginx.list >/dev/null
-  wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo apt-key add -
+  wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg
   sudo apt update
   sudo apt install -y nginx
 fi
@@ -192,14 +186,7 @@ if ! [[ $CHECK_NGINX_NOLIMIT ]]; then
 /' $nginxdefaultconf
 fi
 
-backend_conf='/etc/nginx/sites-available/rmm.conf'
-CHECK_NGINX_REUSEPORT=$(grep reuseport $backend_conf)
-if ! [[ $CHECK_NGINX_REUSEPORT ]]; then
-  printf >&2 "${GREEN}Setting nginx reuseport${NC}\n"
-  sudo sed -i 's/listen 443 ssl;/listen 443 ssl reuseport;/g' $backend_conf
-fi
-
-sudo sed -i 's/# server_names_hash_bucket_size.*/server_names_hash_bucket_size 64;/g' $nginxdefaultconf
+sudo sed -i 's/# server_names_hash_bucket_size.*/server_names_hash_bucket_size 256;/g' $nginxdefaultconf
 
 if ! sudo nginx -t >/dev/null 2>&1; then
   sudo nginx -t
@@ -225,16 +212,24 @@ if ! [[ $HAS_PY311 ]]; then
   sudo rm -rf Python-${PYTHON_VER} Python-${PYTHON_VER}.tgz
 fi
 
+arch=$(uname -m)
+nats_server='/usr/local/bin/nats-server'
+
 HAS_LATEST_NATS=$(/usr/local/bin/nats-server -version | grep "${NATS_SERVER_VER}")
 if ! [[ $HAS_LATEST_NATS ]]; then
   printf >&2 "${GREEN}Updating nats to v${NATS_SERVER_VER}${NC}\n"
   nats_tmp=$(mktemp -d -t nats-XXXXXXXXXX)
-  wget https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VER}/nats-server-v${NATS_SERVER_VER}-linux-amd64.tar.gz -P ${nats_tmp}
-  tar -xzf ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-amd64.tar.gz -C ${nats_tmp}
-  sudo rm -f /usr/local/bin/nats-server
-  sudo mv ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-amd64/nats-server /usr/local/bin/
-  sudo chmod +x /usr/local/bin/nats-server
-  sudo chown ${USER}:${USER} /usr/local/bin/nats-server
+  if [ "$arch" = "x86_64" ]; then
+    natsarch='amd64'
+  else
+    natsarch='arm64'
+  fi
+  wget https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VER}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}.tar.gz -P ${nats_tmp}
+  tar -xzf ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}.tar.gz -C ${nats_tmp}
+  sudo rm -f $nats_server
+  sudo mv ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}/nats-server /usr/local/bin/
+  sudo chmod +x $nats_server
+  sudo chown ${USER}:${USER} $nats_server
   rm -rf ${nats_tmp}
 fi
 
@@ -250,22 +245,8 @@ if [ -d ~/.config ]; then
   sudo chown -R $USER:$GROUP ~/.config
 fi
 
-HAS_NODE16=$(node --version | grep v16)
-if ! [[ $HAS_NODE16 ]]; then
-  printf >&2 "${GREEN}Updating NodeJS to v16${NC}\n"
-  rm -rf /rmm/web/node_modules
-  sudo systemctl stop meshcentral
-  sudo apt remove -y nodejs
-  sudo rm -rf /usr/lib/node_modules
-  curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash -
-  sudo apt update
-  sudo apt install -y nodejs
-  sudo npm install -g npm
-  sudo chown ${USER}:${USER} -R /meshcentral
-  cd /meshcentral
-  rm -rf node_modules/
-  npm install meshcentral@${LATEST_MESH_VER}
-  sudo systemctl start meshcentral
+if ! which npm >/dev/null; then
+  sudo apt install -y npm
 fi
 
 sudo npm install -g npm
@@ -307,8 +288,10 @@ sudo chown ${USER}:${USER} -R ${SCRIPTS_DIR}
 sudo chown ${USER}:${USER} /var/log/celery
 sudo chown ${USER}:${USER} -R /etc/conf.d/
 sudo chown ${USER}:${USER} -R /etc/letsencrypt
-sudo chown ${USER}:${USER} -R /rmmbackups
 
+if [ -d /rmmbackups ]; then
+  sudo chown ${USER}:${USER} -R /rmmbackups
+fi
 
 CHECK_CELERY_CONFIG=$(grep "autoscale=20,2" /etc/conf.d/celery.conf)
 if ! [[ $CHECK_CELERY_CONFIG ]]; then
@@ -325,9 +308,16 @@ EOF
   echo "${adminenabled}" | tee --append /rmm/api/tacticalrmm/tacticalrmm/local_settings.py >/dev/null
 fi
 
-sudo cp /rmm/natsapi/bin/nats-api /usr/local/bin
-sudo chown ${USER}:${USER} /usr/local/bin/nats-api
-sudo chmod +x /usr/local/bin/nats-api
+if [ "$arch" = "x86_64" ]; then
+  natsapi='nats-api'
+else
+  natsapi='nats-api-arm64'
+fi
+
+nats_api='/usr/local/bin/nats-api'
+sudo cp /rmm/natsapi/bin/${natsapi} $nats_api
+sudo chown ${USER}:${USER} $nats_api
+sudo chmod +x $nats_api
 
 if [[ "${CURRENT_PIP_VER}" != "${LATEST_PIP_VER}" ]] || [[ "$force" = true ]]; then
   rm -rf /rmm/api/env
@@ -344,9 +334,20 @@ else
   pip install -r requirements.txt
 fi
 
+if [ ! -d /opt/tactical/reporting/assets ]; then
+  sudo mkdir -p /opt/tactical/reporting/assets
+fi
+
+if [ ! -d /opt/tactical/reporting/schemas ]; then
+  sudo mkdir /opt/tactical/reporting/schemas
+fi
+
+sudo chown -R ${USER}:${USER} /opt/tactical
+
 python manage.py pre_update_tasks
 celery -A tacticalrmm purge -f
 python manage.py migrate
+python manage.py generate_json_schemas
 python manage.py delete_tokens
 python manage.py collectstatic --no-input
 python manage.py reload_nats
@@ -356,9 +357,137 @@ python manage.py create_natsapi_conf
 python manage.py create_uwsgi_conf
 python manage.py clear_redis_celery_locks
 python manage.py post_update_tasks
+echo "Running management commands...please wait..."
 API=$(python manage.py get_config api)
 WEB_VERSION=$(python manage.py get_config webversion)
+FRONTEND=$(python manage.py get_config webdomain)
+MESHDOMAIN=$(python manage.py get_config meshdomain)
+WEBTAR_URL=$(python manage.py get_webtar_url)
+CERT_PUB_KEY=$(python manage.py get_config certfile)
+CERT_PRIV_KEY=$(python manage.py get_config keyfile)
 deactivate
+
+if grep -q manage_etc_hosts /etc/hosts; then
+  sudo sed -i '/manage_etc_hosts: true/d' /etc/cloud/cloud.cfg >/dev/null
+  if ! grep -q "manage_etc_hosts: false" /etc/cloud/cloud.cfg; then
+    echo -e "\nmanage_etc_hosts: false" | sudo tee --append /etc/cloud/cloud.cfg >/dev/null
+    sudo systemctl restart cloud-init >/dev/null
+  fi
+fi
+
+rmmconf='/etc/nginx/sites-available/rmm.conf'
+if ! grep -q "location /assets/" $rmmconf; then
+  printf >&2 "${YELLOW}WARNING!!!!\n\n"
+  printf >&2 "${rmmconf} will now be replaced due to changes needed for this update.\n\n"
+  printf >&2 "A backup of the existing config will be created in your home directory at ~/rmm.conf.nginx.bak\n\n"
+  printf >&2 "If you have made any custom or unsupported changes to this file please add them back in after this update.\n\n"
+  read -n 1 -s -r -p "Press any key to confirm you have read the above and continue..."
+  printf >&2 "\n${NC}\n"
+  cp $rmmconf ~/rmm.conf.nginx.bak
+  nginxrmm="$(
+    cat <<EOF
+server_tokens off;
+
+upstream tacticalrmm {
+    server unix:////rmm/api/tacticalrmm/tacticalrmm.sock;
+}
+
+map \$http_user_agent \$ignore_ua {
+    "~python-requests.*" 0;
+    "~go-resty.*" 0;
+    default 1;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${API};
+    return 301 https://\$server_name\$request_uri;
+}
+
+server {
+    listen 443 ssl reuseport;
+    listen [::]:443 ssl;
+    server_name ${API};
+    client_max_body_size 300M;
+    access_log /rmm/api/tacticalrmm/tacticalrmm/private/log/access.log combined if=\$ignore_ua;
+    error_log /rmm/api/tacticalrmm/tacticalrmm/private/log/error.log;
+    ssl_certificate ${CERT_PUB_KEY};
+    ssl_certificate_key ${CERT_PRIV_KEY};
+    
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers EECDH+AESGCM:EDH+AESGCM;
+    ssl_ecdh_curve secp384r1;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    add_header X-Content-Type-Options nosniff;
+    
+    location /static/ {
+        root /rmm/api/tacticalrmm;
+        add_header "Access-Control-Allow-Origin" "https://${FRONTEND}";
+    }
+
+    location /private/ {
+        internal;
+        add_header "Access-Control-Allow-Origin" "https://${FRONTEND}";
+        alias /rmm/api/tacticalrmm/tacticalrmm/private/;
+    }
+
+    location /assets/ {
+        internal;
+        add_header "Access-Control-Allow-Origin" "https://${FRONTEND}";
+        alias /opt/tactical/reporting/assets/;
+    }
+
+    location ~ ^/ws/ {
+        proxy_pass http://unix:/rmm/daphne.sock;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        proxy_redirect     off;
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Host \$server_name;
+    }
+
+    location ~ ^/natsws {
+        proxy_pass http://127.0.0.1:9235;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-Host \$host:\$server_port;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location / {
+        uwsgi_pass  tacticalrmm;
+        include     /etc/nginx/uwsgi_params;
+        uwsgi_read_timeout 300s;
+        uwsgi_ignore_client_abort on;
+    }
+}
+EOF
+  )"
+  echo "${nginxrmm}" | sudo tee /etc/nginx/sites-available/rmm.conf >/dev/null
+fi
+
+CHECK_HOSTS=$(grep 127.0.1.1 /etc/hosts | grep "$API" | grep "$FRONTEND" | grep "$MESHDOMAIN")
+HAS_11=$(grep 127.0.1.1 /etc/hosts)
+
+if ! [[ $CHECK_HOSTS ]]; then
+  if [[ $HAS_11 ]]; then
+    sudo sed -i "/127.0.1.1/s/$/ ${API} ${FRONTEND} ${MESHDOMAIN}/" /etc/hosts
+  else
+    echo "127.0.1.1 ${API} ${FRONTEND} ${MESHDOMAIN}" | sudo tee --append /etc/hosts >/dev/null
+  fi
+fi
 
 if [ -d /rmm/web ]; then
   rm -rf /rmm/web
@@ -369,7 +498,7 @@ if [ ! -d /var/www/rmm ]; then
 fi
 
 webtar="trmm-web-v${WEB_VERSION}.tar.gz"
-wget -q https://github.com/amidaware/tacticalrmm-web/releases/download/v${WEB_VERSION}/${webtar} -O /tmp/${webtar}
+wget -q ${WEBTAR_URL} -O /tmp/${webtar}
 sudo rm -rf /var/www/rmm/dist
 sudo tar -xzf /tmp/${webtar} -C /var/www/rmm
 echo "window._env_ = {PROD_URL: \"https://${API}\"}" | sudo tee /var/www/rmm/dist/env-config.js >/dev/null
@@ -381,17 +510,28 @@ for i in nats nats-api rmm daphne celery celerybeat nginx; do
   sudo systemctl start ${i}
 done
 
-sleep 1
-/rmm/api/env/bin/python /rmm/api/tacticalrmm/manage.py update_agents
-
 CURRENT_MESH_VER=$(cd /meshcentral/node_modules/meshcentral && node -p -e "require('./package.json').version")
 if [[ "${CURRENT_MESH_VER}" != "${LATEST_MESH_VER}" ]] || [[ "$force" = true ]]; then
   printf >&2 "${GREEN}Updating meshcentral from ${CURRENT_MESH_VER} to ${LATEST_MESH_VER}${NC}\n"
   sudo systemctl stop meshcentral
   sudo chown ${USER}:${USER} -R /meshcentral
   cd /meshcentral
-  rm -rf node_modules/
-  npm install meshcentral@${LATEST_MESH_VER}
+  rm -rf node_modules/ package.json package-lock.json
+  mesh_pkg="$(
+    cat <<EOF
+{
+  "dependencies": {
+    "archiver": "5.3.1",
+    "meshcentral": "${LATEST_MESH_VER}",
+    "otplib": "10.2.3",
+    "pg": "8.7.1",
+    "pgtools": "0.3.2"
+  }
+}
+EOF
+  )"
+  echo "${mesh_pkg}" >/meshcentral/package.json
+  npm install
   sudo systemctl start meshcentral
 fi
 

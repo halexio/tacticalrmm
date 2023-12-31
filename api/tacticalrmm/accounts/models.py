@@ -95,7 +95,6 @@ class Role(BaseAuditModel):
 
     # agents
     can_list_agents = models.BooleanField(default=False)
-    can_ping_agents = models.BooleanField(default=False)
     can_use_mesh = models.BooleanField(default=False)
     can_uninstall_agents = models.BooleanField(default=False)
     can_update_agents = models.BooleanField(default=False)
@@ -185,6 +184,10 @@ class Role(BaseAuditModel):
     # authentication
     can_list_api_keys = models.BooleanField(default=False)
     can_manage_api_keys = models.BooleanField(default=False)
+
+    # reporting
+    can_view_reports = models.BooleanField(default=False)
+    can_manage_reports = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name

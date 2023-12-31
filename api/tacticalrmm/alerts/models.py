@@ -627,8 +627,7 @@ class Alert(models.Model):
         pattern = re.compile(".*\\{\\{alert\\.(.*)\\}\\}.*")
 
         for arg in args:
-            match = pattern.match(arg)
-            if match:
+            if match := pattern.match(arg):
                 name = match.group(1)
 
                 # check if attr exists and isn't a function
@@ -639,6 +638,8 @@ class Alert(models.Model):
 
                 try:
                     temp_args.append(re.sub("\\{\\{.*\\}\\}", value, arg))
+                except re.error:
+                    temp_args.append(re.sub("\\{\\{.*\\}\\}", re.escape(value), arg))
                 except Exception as e:
                     DebugLog.error(log_type=DebugLogType.SCRIPTING, message=str(e))
                     continue

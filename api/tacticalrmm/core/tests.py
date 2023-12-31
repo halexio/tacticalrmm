@@ -3,28 +3,30 @@ from unittest.mock import patch
 import requests
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
-from django.conf import settings
+
+# from django.conf import settings
 from django.core.management import call_command
 from django.test import override_settings
 from model_bakery import baker
 from rest_framework.authtoken.models import Token
 
-from agents.models import Agent
+# from agents.models import Agent
 from core.utils import get_core_settings, get_meshagent_url
-from logs.models import PendingAction
+
+# from logs.models import PendingAction
 from tacticalrmm.constants import (
     CONFIG_MGMT_CMDS,
     CustomFieldModel,
     MeshAgentIdent,
-    PAAction,
-    PAStatus,
+    # PAAction,
+    # PAStatus,
 )
 from tacticalrmm.test import TacticalTestCase
 
 from .consumers import DashInfo
 from .models import CustomField, GlobalKVStore, URLAction
 from .serializers import CustomFieldSerializer, KeyStoreSerializer, URLActionSerializer
-from .tasks import core_maintenance_tasks, resolve_pending_actions
+from .tasks import core_maintenance_tasks  # , resolve_pending_actions
 
 
 class TestCodeSign(TacticalTestCase):
@@ -410,28 +412,28 @@ class TestCoreTasks(TacticalTestCase):
 
         self.check_not_authenticated("get", url)
 
-    def test_resolved_pending_agentupdate_task(self):
-        online = baker.make_recipe("agents.online_agent", version="2.0.0", _quantity=20)
-        offline = baker.make_recipe(
-            "agents.offline_agent", version="2.0.0", _quantity=20
-        )
-        agents = online + offline
-        for agent in agents:
-            baker.make_recipe("logs.pending_agentupdate_action", agent=agent)
+    # def test_resolved_pending_agentupdate_task(self):
+    #     online = baker.make_recipe("agents.online_agent", version="2.0.0", _quantity=20)
+    #     offline = baker.make_recipe(
+    #         "agents.offline_agent", version="2.0.0", _quantity=20
+    #     )
+    #     agents = online + offline
+    #     for agent in agents:
+    #         baker.make_recipe("logs.pending_agentupdate_action", agent=agent)
 
-        Agent.objects.update(version=settings.LATEST_AGENT_VER)
+    #     Agent.objects.update(version=settings.LATEST_AGENT_VER)
 
-        resolve_pending_actions()
+    #     resolve_pending_actions()
 
-        complete = PendingAction.objects.filter(
-            action_type=PAAction.AGENT_UPDATE, status=PAStatus.COMPLETED
-        ).count()
-        old = PendingAction.objects.filter(
-            action_type=PAAction.AGENT_UPDATE, status=PAStatus.PENDING
-        ).count()
+    #     complete = PendingAction.objects.filter(
+    #         action_type=PAAction.AGENT_UPDATE, status=PAStatus.COMPLETED
+    #     ).count()
+    #     old = PendingAction.objects.filter(
+    #         action_type=PAAction.AGENT_UPDATE, status=PAStatus.PENDING
+    #     ).count()
 
-        self.assertEqual(complete, 20)
-        self.assertEqual(old, 20)
+    #     self.assertEqual(complete, 20)
+    #     self.assertEqual(old, 20)
 
 
 class TestCoreMgmtCommands(TacticalTestCase):
@@ -499,4 +501,28 @@ class TestCoreUtils(TacticalTestCase):
         self.assertEqual(
             r,
             "http://tactical-meshcentral:4443/meshagents?id=4&meshid=abc123&installflags=0",
+        )
+
+    @override_settings(TRMM_INSECURE=True)
+    def test_get_meshagent_url_insecure(self):
+        r = get_meshagent_url(
+            ident=MeshAgentIdent.DARWIN_UNIVERSAL,
+            plat="darwin",
+            mesh_site="https://mesh.example.com",
+            mesh_device_id="abc123",
+        )
+        self.assertEqual(
+            r,
+            "http://mesh.example.com:4430/meshagents?id=abc123&installflags=2&meshinstall=10005",
+        )
+
+        r = get_meshagent_url(
+            ident=MeshAgentIdent.WIN64,
+            plat="windows",
+            mesh_site="https://mesh.example.com",
+            mesh_device_id="abc123",
+        )
+        self.assertEqual(
+            r,
+            "http://mesh.example.com:4430/meshagents?id=4&meshid=abc123&installflags=0",
         )

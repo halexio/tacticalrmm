@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-SCRIPT_VERSION="73"
-SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/install.sh'
+SCRIPT_VERSION="82"
+SCRIPT_URL="https://raw.githubusercontent.com/amidaware/tacticalrmm/master/install.sh"
 
-sudo apt install -y curl wget dirmngr gnupg lsb-release
+sudo apt install -y curl wget dirmngr gnupg lsb-release ca-certificates
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -12,8 +12,9 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SCRIPTS_DIR='/opt/trmm-community-scripts'
-PYTHON_VER='3.11.3'
+PYTHON_VER='3.11.6'
 SETTINGS_FILE='/rmm/api/tacticalrmm/tacticalrmm/settings.py'
+local_settings='/rmm/api/tacticalrmm/tacticalrmm/local_settings.py'
 
 TMP_FILE=$(mktemp -p "" "rmminstall_XXXXXXXXXX")
 curl -s -L "${SCRIPT_URL}" >${TMP_FILE}
@@ -30,8 +31,8 @@ fi
 rm -f $TMP_FILE
 
 arch=$(uname -m)
-if [ "$arch" != "x86_64" ]; then
-  echo -ne "${RED}ERROR: Only x86_64 arch is supported, not ${arch}${NC}\n"
+if [[ "$arch" != "x86_64" ]] && [[ "$arch" != "aarch64" ]]; then
+  echo -ne "${RED}ERROR: Only x86_64 and aarch64 is supported, not ${arch}${NC}\n"
   exit 1
 fi
 
@@ -49,19 +50,22 @@ codename=$(lsb_release -sc)
 relno=$(lsb_release -sr | cut -d. -f1)
 fullrelno=$(lsb_release -sr)
 
-# Fallback if lsb_release -si returns anything else than Ubuntu, Debian or Raspbian
-if [ ! "$osname" = "ubuntu" ] && [ ! "$osname" = "debian" ]; then
-  osname=$(grep -oP '(?<=^ID=).+' /etc/os-release | tr -d '"')
-  osname=${osname^}
-fi
+not_supported() {
+  echo -ne "${RED}ERROR: Only Debian 11, Debian 12 and Ubuntu 22.04 are supported.${NC}\n"
+}
 
-# determine system
-if ([ "$osname" = "ubuntu" ] && [ "$fullrelno" = "20.04" ]) || ([ "$osname" = "debian" ] && [ $relno -ge 10 ]); then
-  echo $fullrel
+if [[ "$osname" == "debian" ]]; then
+  if [[ "$relno" -ne 11 && "$relno" -ne 12 ]]; then
+    not_supported
+    exit 1
+  fi
+elif [[ "$osname" == "ubuntu" ]]; then
+  if [[ "$fullrelno" != "22.04" ]]; then
+    not_supported
+    exit 1
+  fi
 else
-  echo $fullrel
-  echo -ne "${RED}Supported versions: Ubuntu 20.04, Debian 10 and 11\n"
-  echo -ne "Your system does not appear to be supported${NC}\n"
+  not_supported
   exit 1
 fi
 
@@ -78,16 +82,12 @@ if [[ "$LANG" != *".UTF-8" ]]; then
   exit 1
 fi
 
-if ([ "$osname" = "ubuntu" ]); then
-  mongodb_repo="deb [arch=amd64] https://repo.mongodb.org/apt/$osname $codename/mongodb-org/4.4 multiverse"
-# there is no bullseye repo yet for mongo so just use buster on debian 11
-elif ([ "$osname" = "debian" ] && [ $relno -eq 11 ]); then
-  mongodb_repo="deb [arch=amd64] https://repo.mongodb.org/apt/$osname buster/mongodb-org/4.4 main"
+if [ "$arch" = "x86_64" ]; then
+  pgarch='amd64'
 else
-  mongodb_repo="deb [arch=amd64] https://repo.mongodb.org/apt/$osname $codename/mongodb-org/4.4 main"
+  pgarch='arm64'
 fi
-
-postgresql_repo="deb [arch=amd64] https://apt.postgresql.org/pub/repos/apt/ $codename-pgdg main"
+postgresql_repo="deb [arch=${pgarch} signed-by=/etc/apt/keyrings/postgresql-archive-keyring.gpg] https://apt.postgresql.org/pub/repos/apt/ $codename-pgdg main"
 
 # prevents logging issues with some VPS providers like Vultr if this is a freshly provisioned instance that hasn't been rebooted yet
 sudo systemctl restart systemd-journald.service
@@ -98,6 +98,8 @@ MESHPASSWD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 25 | head -n 1)
 pgusername=$(cat /dev/urandom | tr -dc 'a-z' | fold -w 8 | head -n 1)
 pgpw=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 20 | head -n 1)
 meshusername=$(cat /dev/urandom | tr -dc 'a-z' | fold -w 8 | head -n 1)
+MESHPGUSER=$(cat /dev/urandom | tr -dc 'a-z' | fold -w 8 | head -n 1)
+MESHPGPWD=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 20 | head -n 1)
 
 cls() {
   printf "\033c"
@@ -136,11 +138,12 @@ while [[ $letsemail != *[@]*[.]* ]]; do
   read letsemail
 done
 
-# if server is behind NAT we need to add the 3 subdomains to the host file
-# so that nginx can properly route between the frontend, backend and meshcentral
-# EDIT 8-29-2020
-# running this even if server is __not__ behind NAT just to make DNS resolving faster
-# this also allows the install script to properly finish even if DNS has not fully propagated
+if grep -q manage_etc_hosts /etc/hosts; then
+  sudo sed -i '/manage_etc_hosts: true/d' /etc/cloud/cloud.cfg >/dev/null
+  echo -e "\nmanage_etc_hosts: false" | sudo tee --append /etc/cloud/cloud.cfg >/dev/null
+  sudo systemctl restart cloud-init >/dev/null
+fi
+
 CHECK_HOSTS=$(grep 127.0.1.1 /etc/hosts | grep "$rmmdomain" | grep "$meshdomain" | grep "$frontenddomain")
 HAS_11=$(grep 127.0.1.1 /etc/hosts)
 
@@ -159,30 +162,49 @@ if echo "$IPV4" | grep -qE '^(10\.|172\.1[6789]\.|172\.2[0-9]\.|172\.3[01]\.|192
   BEHIND_NAT=true
 fi
 
+insecure=false
+if [[ $* == *--insecure* ]]; then
+  insecure=true
+fi
+
 sudo apt install -y software-properties-common
 sudo apt update
-sudo apt install -y certbot openssl
+sudo apt install -y openssl
 
-print_green 'Getting wildcard cert'
+if [[ "$insecure" = true ]]; then
+  print_green 'Generating self-signed cert'
+  certdir='/etc/ssl/tactical'
+  sudo mkdir -p $certdir
+  sudo chown ${USER}:${USER} $certdir
+  sudo chmod 770 $certdir
+  CERT_PRIV_KEY=${certdir}/key.pem
+  CERT_PUB_KEY=${certdir}/cert.pem
+  openssl req -x509 -newkey rsa:4096 -sha256 -days 3650 \
+    -nodes -keyout ${CERT_PRIV_KEY} -out ${CERT_PUB_KEY} -subj "/CN=${rootdomain}" \
+    -addext "subjectAltName=DNS:${rootdomain},DNS:*.${rootdomain}"
 
-sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
-while [[ $? -ne 0 ]]; do
+else
+  sudo apt install -y certbot
+  print_green 'Getting wildcard cert'
+
   sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
-done
-
-CERT_PRIV_KEY=/etc/letsencrypt/live/${rootdomain}/privkey.pem
-CERT_PUB_KEY=/etc/letsencrypt/live/${rootdomain}/fullchain.pem
-
-sudo chown ${USER}:${USER} -R /etc/letsencrypt
+  while [[ $? -ne 0 ]]; do
+    sudo certbot certonly --manual -d *.${rootdomain} --agree-tos --no-bootstrap --preferred-challenges dns -m ${letsemail} --no-eff-email
+  done
+  CERT_PRIV_KEY=/etc/letsencrypt/live/${rootdomain}/privkey.pem
+  CERT_PUB_KEY=/etc/letsencrypt/live/${rootdomain}/fullchain.pem
+  sudo chown ${USER}:${USER} -R /etc/letsencrypt
+fi
 
 print_green 'Installing Nginx'
 
-wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo apt-key add -
+sudo mkdir -p /etc/apt/keyrings
+
+wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg
 
 nginxrepo="$(
   cat <<EOF
-deb https://nginx.org/packages/$osname/ $codename nginx
-deb-src https://nginx.org/packages/$osname/ $codename nginx
+deb [signed-by=/etc/apt/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/$osname $codename nginx
 EOF
 )"
 echo "${nginxrepo}" | sudo tee /etc/apt/sources.list.d/nginx.list >/dev/null
@@ -209,7 +231,7 @@ http {
         sendfile on;
         tcp_nopush on;
         types_hash_max_size 2048;
-        server_names_hash_bucket_size 64;
+        server_names_hash_bucket_size 256;
         include /etc/nginx/mime.types;
         default_type application/octet-stream;
         ssl_protocols TLSv1.2 TLSv1.3;
@@ -230,20 +252,13 @@ done
 
 print_green 'Installing NodeJS'
 
-curl -sL https://deb.nodesource.com/setup_16.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | sudo gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+NODE_MAJOR=20
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_$NODE_MAJOR.x nodistro main" | sudo tee /etc/apt/sources.list.d/nodesource.list
 sudo apt update
 sudo apt install -y gcc g++ make
 sudo apt install -y nodejs
 sudo npm install -g npm
-
-print_green 'Installing MongoDB'
-
-wget -qO - https://www.mongodb.org/static/pgp/server-4.4.asc | sudo apt-key add -
-echo "$mongodb_repo" | sudo tee /etc/apt/sources.list.d/mongodb-org-4.4.list
-sudo apt update
-sudo apt install -y mongodb-org
-sudo systemctl enable mongod
-sudo systemctl restart mongod
 
 print_green "Installing Python ${PYTHON_VER}"
 
@@ -260,15 +275,15 @@ cd ~
 sudo rm -rf Python-${PYTHON_VER} Python-${PYTHON_VER}.tgz
 
 print_green 'Installing redis and git'
-sudo apt install -y ca-certificates redis git
+sudo apt install -y redis git
 
 print_green 'Installing postgresql'
 
 echo "$postgresql_repo" | sudo tee /etc/apt/sources.list.d/pgdg.list
 
-wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/keyrings/postgresql-archive-keyring.gpg
 sudo apt update
-sudo apt install -y postgresql-14
+sudo apt install -y postgresql-15
 sleep 2
 sudo systemctl enable --now postgresql
 
@@ -277,14 +292,27 @@ until pg_isready >/dev/null; do
   sleep 3
 done
 
-print_green 'Creating database for the rmm'
+print_green 'Creating database for trmm'
 
-sudo -u postgres psql -c "CREATE DATABASE tacticalrmm"
-sudo -u postgres psql -c "CREATE USER ${pgusername} WITH PASSWORD '${pgpw}'"
-sudo -u postgres psql -c "ALTER ROLE ${pgusername} SET client_encoding TO 'utf8'"
-sudo -u postgres psql -c "ALTER ROLE ${pgusername} SET default_transaction_isolation TO 'read committed'"
-sudo -u postgres psql -c "ALTER ROLE ${pgusername} SET timezone TO 'UTC'"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE tacticalrmm TO ${pgusername}"
+sudo -iu postgres psql -c "CREATE DATABASE tacticalrmm"
+sudo -iu postgres psql -c "CREATE USER ${pgusername} WITH PASSWORD '${pgpw}'"
+sudo -iu postgres psql -c "ALTER ROLE ${pgusername} SET client_encoding TO 'utf8'"
+sudo -iu postgres psql -c "ALTER ROLE ${pgusername} SET default_transaction_isolation TO 'read committed'"
+sudo -iu postgres psql -c "ALTER ROLE ${pgusername} SET timezone TO 'UTC'"
+sudo -iu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE tacticalrmm TO ${pgusername}"
+sudo -iu postgres psql -c "ALTER DATABASE tacticalrmm OWNER TO ${pgusername}"
+sudo -iu postgres psql -c "GRANT USAGE, CREATE ON SCHEMA PUBLIC TO ${pgusername}"
+
+print_green 'Creating database for meshcentral'
+
+sudo -iu postgres psql -c "CREATE DATABASE meshcentral"
+sudo -iu postgres psql -c "CREATE USER ${MESHPGUSER} WITH PASSWORD '${MESHPGPWD}'"
+sudo -iu postgres psql -c "ALTER ROLE ${MESHPGUSER} SET client_encoding TO 'utf8'"
+sudo -iu postgres psql -c "ALTER ROLE ${MESHPGUSER} SET default_transaction_isolation TO 'read committed'"
+sudo -iu postgres psql -c "ALTER ROLE ${MESHPGUSER} SET timezone TO 'UTC'"
+sudo -iu postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE meshcentral TO ${MESHPGUSER}"
+sudo -iu postgres psql -c "ALTER DATABASE meshcentral OWNER TO ${MESHPGUSER}"
+sudo -iu postgres psql -c "GRANT USAGE, CREATE ON SCHEMA PUBLIC TO ${MESHPGUSER}"
 
 print_green 'Cloning repos'
 
@@ -308,11 +336,17 @@ git checkout main
 
 print_green 'Downloading NATS'
 
+if [ "$arch" = "x86_64" ]; then
+  natsarch='amd64'
+else
+  natsarch='arm64'
+fi
+
 NATS_SERVER_VER=$(grep "^NATS_SERVER_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print $5}')
 nats_tmp=$(mktemp -d -t nats-XXXXXXXXXX)
-wget https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VER}/nats-server-v${NATS_SERVER_VER}-linux-amd64.tar.gz -P ${nats_tmp}
-tar -xzf ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-amd64.tar.gz -C ${nats_tmp}
-sudo mv ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-amd64/nats-server /usr/local/bin/
+wget https://github.com/nats-io/nats-server/releases/download/v${NATS_SERVER_VER}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}.tar.gz -P ${nats_tmp}
+tar -xzf ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}.tar.gz -C ${nats_tmp}
+sudo mv ${nats_tmp}/nats-server-v${NATS_SERVER_VER}-linux-${natsarch}/nats-server /usr/local/bin/
 sudo chmod +x /usr/local/bin/nats-server
 sudo chown ${USER}:${USER} /usr/local/bin/nats-server
 rm -rf ${nats_tmp}
@@ -324,16 +358,28 @@ MESH_VER=$(grep "^MESH_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print $5}')
 sudo mkdir -p /meshcentral/meshcentral-data
 sudo chown ${USER}:${USER} -R /meshcentral
 cd /meshcentral
-npm install meshcentral@${MESH_VER}
 sudo chown ${USER}:${USER} -R /meshcentral
+
+mesh_pkg="$(
+  cat <<EOF
+{
+  "dependencies": {
+    "archiver": "5.3.1",
+    "meshcentral": "${MESH_VER}",
+    "otplib": "10.2.3",
+    "pg": "8.7.1",
+    "pgtools": "0.3.2"
+  }
+}
+EOF
+)"
+echo "${mesh_pkg}" >/meshcentral/package.json
 
 meshcfg="$(
   cat <<EOF
 {
   "settings": {
     "cert": "${meshdomain}",
-    "mongoDb": "mongodb://127.0.0.1:27017",
-    "mongoDbName": "meshcentral",
     "WANonly": true,
     "minify": 1,
     "port": 4430,
@@ -341,15 +387,20 @@ meshcfg="$(
     "redirPort": 800,
     "allowLoginToken": true,
     "allowFraming": true,
-    "_agentPing": 60,
-    "agentPong": 300,
+    "agentPing": 35,
     "allowHighQualityDesktop": true,
     "tlsOffload": "127.0.0.1",
     "agentCoreDump": false,
     "compression": true,
     "wsCompression": true,
     "agentWsCompression": true,
-    "maxInvalidLogin": { "time": 5, "count": 5, "coolofftime": 30 }
+    "maxInvalidLogin": { "time": 5, "count": 5, "coolofftime": 30 },
+    "postgres": {
+      "user": "${MESHPGUSER}",
+      "password": "${MESHPGPWD}",
+      "port": "5432",
+      "host": "localhost"
+    }
   },
   "domains": {
     "": {
@@ -366,6 +417,8 @@ meshcfg="$(
 EOF
 )"
 echo "${meshcfg}" >/meshcentral/meshcentral-data/config.json
+
+npm install
 
 localvars="$(
   cat <<EOF
@@ -398,16 +451,43 @@ REDIS_HOST    = "localhost"
 ADMIN_ENABLED = True
 EOF
 )"
-echo "${localvars}" >/rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+echo "${localvars}" >$local_settings
 
-sudo cp /rmm/natsapi/bin/nats-api /usr/local/bin
+if [[ "$insecure" = true ]]; then
+  echo "TRMM_INSECURE = True" | tee --append $local_settings >/dev/null
+fi
+
+if [ "$arch" = "x86_64" ]; then
+  natsapi='nats-api'
+else
+  natsapi='nats-api-arm64'
+fi
+
+sudo cp /rmm/natsapi/bin/${natsapi} /usr/local/bin/nats-api
 sudo chown ${USER}:${USER} /usr/local/bin/nats-api
 sudo chmod +x /usr/local/bin/nats-api
 
 print_green 'Installing the backend'
 
+# for weasyprint
+if [[ "$osname" == "debian" ]]; then
+  count=$(dpkg -l | grep -E "libpango-1.0-0|libpangoft2-1.0-0" | wc -l)
+  if ! [ "$count" -eq 2 ]; then
+    sudo apt install -y libpango-1.0-0 libpangoft2-1.0-0
+  fi
+elif [[ "$osname" == "ubuntu" ]]; then
+  count=$(dpkg -l | grep -E "libpango-1.0-0|libharfbuzz0b|libpangoft2-1.0-0" | wc -l)
+  if ! [ "$count" -eq 3 ]; then
+    sudo apt install -y libpango-1.0-0 libharfbuzz0b libpangoft2-1.0-0
+  fi
+fi
+
 SETUPTOOLS_VER=$(grep "^SETUPTOOLS_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print $5}')
 WHEEL_VER=$(grep "^WHEEL_VER" "$SETTINGS_FILE" | awk -F'[= "]' '{print $5}')
+
+sudo mkdir -p /opt/tactical/reporting/assets
+sudo mkdir -p /opt/tactical/reporting/schemas
+sudo chown -R ${USER}:${USER} /opt/tactical
 
 cd /rmm/api
 python3.11 -m venv env
@@ -417,15 +497,17 @@ pip install --no-cache-dir --upgrade pip
 pip install --no-cache-dir setuptools==${SETUPTOOLS_VER} wheel==${WHEEL_VER}
 pip install --no-cache-dir -r /rmm/api/tacticalrmm/requirements.txt
 python manage.py migrate
+python manage.py generate_json_schemas
 python manage.py collectstatic --no-input
 python manage.py create_natsapi_conf
 python manage.py create_uwsgi_conf
 python manage.py load_chocos
 python manage.py load_community_scripts
 WEB_VERSION=$(python manage.py get_config webversion)
+WEBTAR_URL=$(python manage.py get_webtar_url)
 printf >&2 "${YELLOW}%0.s*${NC}" {1..80}
 printf >&2 "\n"
-printf >&2 "${YELLOW}Please create your login for the RMM website and django admin${NC}\n"
+printf >&2 "${YELLOW}Please create your login for the RMM website${NC}\n"
 printf >&2 "${YELLOW}%0.s*${NC}" {1..80}
 printf >&2 "\n"
 echo -ne "Username: "
@@ -459,10 +541,10 @@ EOF
 )"
 echo "${rmmservice}" | sudo tee /etc/systemd/system/rmm.service >/dev/null
 
-daphneservice="$(
+uviservice="$(
   cat <<EOF
 [Unit]
-Description=django channels daemon v2
+Description=uvicorn daemon v1
 After=network.target
 
 [Service]
@@ -470,7 +552,7 @@ User=${USER}
 Group=www-data
 WorkingDirectory=/rmm/api/tacticalrmm
 Environment="PATH=/rmm/api/env/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-ExecStart=/rmm/api/env/bin/daphne -u /rmm/daphne.sock tacticalrmm.asgi:application
+ExecStart=/rmm/api/env/bin/uvicorn --uds /rmm/daphne.sock --forwarded-allow-ips='*' tacticalrmm.asgi:application
 ExecStartPre=rm -f /rmm/daphne.sock
 ExecStartPre=rm -f /rmm/daphne.sock.lock
 Restart=always
@@ -480,7 +562,7 @@ RestartSec=3s
 WantedBy=multi-user.target
 EOF
 )"
-echo "${daphneservice}" | sudo tee /etc/systemd/system/daphne.service >/dev/null
+echo "${uviservice}" | sudo tee /etc/systemd/system/daphne.service >/dev/null
 
 natsservice="$(
   cat <<EOF
@@ -495,7 +577,7 @@ ExecStart=/usr/local/bin/nats-server -c /rmm/api/tacticalrmm/nats-rmm.conf
 ExecReload=/usr/bin/kill -s HUP \$MAINPID
 ExecStop=/usr/bin/kill -s SIGINT \$MAINPID
 User=${USER}
-Group=www-data
+Group=${USER}
 Restart=always
 RestartSec=5s
 LimitNOFILE=1000000
@@ -567,12 +649,19 @@ server {
     
     location /static/ {
         root /rmm/api/tacticalrmm;
+        add_header "Access-Control-Allow-Origin" "https://${frontenddomain}";
     }
 
     location /private/ {
         internal;
         add_header "Access-Control-Allow-Origin" "https://${frontenddomain}";
         alias /rmm/api/tacticalrmm/tacticalrmm/private/;
+    }
+
+    location /assets/ {
+        internal;
+        add_header "Access-Control-Allow-Origin" "https://${frontenddomain}";
+        alias /opt/tactical/reporting/assets/;
     }
 
     location ~ ^/ws/ {
@@ -736,7 +825,7 @@ meshservice="$(
   cat <<EOF
 [Unit]
 Description=MeshCentral Server
-After=network.target mongod.service nginx.service
+After=network.target postgresql.service nginx.service
 [Service]
 Type=simple
 LimitNOFILE=1000000
@@ -767,7 +856,7 @@ fi
 print_green 'Installing the frontend'
 
 webtar="trmm-web-v${WEB_VERSION}.tar.gz"
-wget -q https://github.com/amidaware/tacticalrmm-web/releases/download/v${WEB_VERSION}/${webtar} -O /tmp/${webtar}
+wget -q ${WEBTAR_URL} -O /tmp/${webtar}
 sudo mkdir -p /var/www/rmm
 sudo tar -xzf /tmp/${webtar} -C /var/www/rmm
 echo "window._env_ = {PROD_URL: \"https://${rmmdomain}\"}" | sudo tee /var/www/rmm/dist/env-config.js >/dev/null
@@ -828,7 +917,7 @@ done
 sleep 5
 sudo systemctl enable meshcentral
 
-print_green 'Starting meshcentral and waiting for it to install plugins'
+print_green 'Starting meshcentral and waiting for it to be ready'
 
 sudo systemctl restart meshcentral
 
@@ -840,7 +929,7 @@ sleep 3
 while ! [[ $CHECK_MESH_READY ]]; do
   CHECK_MESH_READY=$(sudo journalctl -u meshcentral.service -b --no-pager | grep "MeshCentral HTTP server running on port")
   echo -ne "${GREEN}Mesh Central not ready yet...${NC}\n"
-  sleep 3
+  sleep 5
 done
 
 print_green 'Generating meshcentral login token key'
@@ -852,7 +941,7 @@ meshtoken="$(
 MESH_TOKEN_KEY = "${MESHTOKENKEY}"
 EOF
 )"
-echo "${meshtoken}" | tee --append /rmm/api/tacticalrmm/tacticalrmm/local_settings.py >/dev/null
+echo "${meshtoken}" | tee --append $local_settings >/dev/null
 
 print_green 'Creating meshcentral account and group'
 
@@ -870,7 +959,7 @@ sleep 5
 while ! [[ $CHECK_MESH_READY2 ]]; do
   CHECK_MESH_READY2=$(sudo journalctl -u meshcentral.service -b --no-pager | grep "MeshCentral HTTP server running on port")
   echo -ne "${GREEN}Mesh Central not ready yet...${NC}\n"
-  sleep 3
+  sleep 5
 done
 
 node node_modules/meshcentral/meshctrl.js --url wss://${meshdomain}:443 --loginuser ${meshusername} --loginpass ${MESHPASSWD} AddDeviceGroup --name TacticalRMM
@@ -889,7 +978,7 @@ sudo systemctl enable nats-api.service
 sudo systemctl start nats-api.service
 
 ## disable django admin
-sed -i 's/ADMIN_ENABLED = True/ADMIN_ENABLED = False/g' /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+sed -i 's/ADMIN_ENABLED = True/ADMIN_ENABLED = False/g' $local_settings
 
 print_green 'Restarting services'
 for i in rmm.service daphne.service celery.service celerybeat.service; do
@@ -901,7 +990,6 @@ printf >&2 "${YELLOW}%0.s*${NC}" {1..80}
 printf >&2 "\n\n"
 printf >&2 "${YELLOW}Installation complete!${NC}\n\n"
 printf >&2 "${YELLOW}Access your rmm at: ${GREEN}https://${frontenddomain}${NC}\n\n"
-printf >&2 "${YELLOW}Django admin url (disabled by default): ${GREEN}https://${rmmdomain}/${ADMINURL}/${NC}\n\n"
 printf >&2 "${YELLOW}MeshCentral username: ${GREEN}${meshusername}${NC}\n"
 printf >&2 "${YELLOW}MeshCentral password: ${GREEN}${MESHPASSWD}${NC}\n\n"
 
