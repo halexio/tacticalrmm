@@ -610,10 +610,10 @@ def install_agent(request):
 
     codesign_token, is_valid = token_is_valid()
 
-    if request.data["installMethod"] in {"bash", "mac"} and not is_valid:
-        return notify_error(
-            "Linux/Mac agents require code signing. Please see https://docs.tacticalrmm.com/code_signing/ for more info."
-        )
+    #if request.data["installMethod"] in {"bash", "mac"} and not is_valid:
+    #    return notify_error(
+    #        "Linux/Mac agents require code signing. Please see https://docs.tacticalrmm.com/code_signing/ for more info."
+    #    )
 
     inno = f"tacticalagent-v{version}-{plat}-{goarch}"
     if plat == AgentPlat.WINDOWS:
