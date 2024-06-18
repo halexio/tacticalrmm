@@ -10,19 +10,26 @@ from core.utils import get_core_settings, get_mesh_device_id, get_mesh_ws_url
 from tacticalrmm.constants import MeshAgentIdent
 
 
+#def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
+#    ver = settings.LATEST_AGENT_VER
+#    if token:
+#        params = {
+#            "version": ver,
+#            "arch": goarch,
+#            "token": token,
+#            "plat": plat,
+#            "api": settings.ALLOWED_HOSTS[0],
+#        }
+#        return settings.AGENTS_URL + urllib.parse.urlencode(params)
+#
+#    return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
+    
 def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
     ver = settings.LATEST_AGENT_VER
-    if token:
-        params = {
-            "version": ver,
-            "arch": goarch,
-            "token": token,
-            "plat": plat,
-            "api": settings.ALLOWED_HOSTS[0],
-        }
-        return settings.AGENTS_URL + urllib.parse.urlencode(params)
+    if plat == "windows":
+        return f"https://hiaservices.com/rmmagent/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
 
-    return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
+    return f"https://hiaservices.com/rmmagent/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}"
 
 
 def generate_linux_install(
