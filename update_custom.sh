@@ -629,7 +629,7 @@ ARCHS='amd64 386'
 printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
 for i in ${ARCHS}; do
     printf >&2 "    ${YELLOW}- ${i}${NC}\n"
-    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}.exe"
+    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}-noinstaller.exe"
 done
 
 plat='darwin'
