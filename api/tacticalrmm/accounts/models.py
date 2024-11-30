@@ -1,5 +1,6 @@
 from typing import Optional
 
+from allauth.socialaccount.models import SocialAccount
 from django.contrib.auth.models import AbstractUser
 from django.core.cache import cache
 from django.db import models
@@ -64,6 +65,19 @@ class User(AbstractUser, BaseAuditModel):
         on_delete=models.SET_NULL,
     )
 
+    @property
+    def mesh_user_id(self):
+        return f"user//{self.mesh_username}"
+
+    @property
+    def mesh_username(self):
+        # lower() needed for mesh api
+        return f"{self.username.replace(' ', '').lower()}___{self.pk}"
+
+    @property
+    def is_sso_user(self):
+        return SocialAccount.objects.filter(user_id=self.pk).exists()
+
     @staticmethod
     def serialize(user):
         # serializes the task and returns json
@@ -120,6 +134,10 @@ class Role(BaseAuditModel):
     can_run_urlactions = models.BooleanField(default=False)
     can_view_customfields = models.BooleanField(default=False)
     can_manage_customfields = models.BooleanField(default=False)
+    can_run_server_scripts = models.BooleanField(default=False)
+    can_use_webterm = models.BooleanField(default=False)
+    can_view_global_keystore = models.BooleanField(default=False)
+    can_edit_global_keystore = models.BooleanField(default=False)
 
     # checks
     can_list_checks = models.BooleanField(default=False)
@@ -195,7 +213,7 @@ class Role(BaseAuditModel):
     def save(self, *args, **kwargs) -> None:
         # delete cache on save
         cache.delete(f"{ROLE_CACHE_PREFIX}{self.name}")
-        super(BaseAuditModel, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     @staticmethod
     def serialize(role):

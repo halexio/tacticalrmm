@@ -21,6 +21,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.tasks import sync_mesh_perms_task
 from core.utils import (
     get_core_settings,
     get_mesh_ws_url,
@@ -258,6 +259,7 @@ class GetUpdateDeleteAgent(APIView):
                     serializer.is_valid(raise_exception=True)
                     serializer.save()
 
+        sync_mesh_perms_task.delay()
         return Response("The agent was updated successfully")
 
     # uninstall agent
@@ -283,6 +285,7 @@ class GetUpdateDeleteAgent(APIView):
                 message=f"Unable to remove agent {name} from meshcentral database: {e}",
                 log_type=DebugLogType.AGENT_ISSUES,
             )
+        sync_mesh_perms_task.delay()
         return Response(f"{name} will now be uninstalled.")
 
 
@@ -325,13 +328,13 @@ class AgentMeshCentral(APIView):
         agent = get_object_or_404(Agent, agent_id=agent_id)
         core = get_core_settings()
 
-        if not core.mesh_disable_auto_login:
-            token = get_login_token(
-                key=core.mesh_token, user=f"user//{core.mesh_username}"
-            )
-            token_param = f"login={token}&"
-        else:
-            token_param = ""
+        user = (
+            request.user.mesh_user_id
+            if core.sync_mesh_with_trmm
+            else f"user//{core.mesh_api_superuser}"
+        )
+        token = get_login_token(key=core.mesh_token, user=user)
+        token_param = f"login={token}&"
 
         control = f"{core.mesh_site}/?{token_param}gotonode={agent.mesh_node_id}&viewmode=11&hide=31"
         terminal = f"{core.mesh_site}/?{token_param}gotonode={agent.mesh_node_id}&viewmode=12&hide=31"
@@ -489,6 +492,19 @@ def send_raw_cmd(request, agent_id):
     )
 
     return Response(r)
+
+
+class Shutdown(APIView):
+    permission_classes = [IsAuthenticated, RebootAgentPerms]
+
+    # shutdown
+    def post(self, request, agent_id):
+        agent = get_object_or_404(Agent, agent_id=agent_id)
+        r = asyncio.run(agent.nats_cmd({"func": "shutdown"}, timeout=10))
+        if r != "ok":
+            return notify_error("Unable to contact the agent")
+
+        return Response("ok")
 
 
 class Reboot(APIView):
@@ -752,6 +768,10 @@ def run_script(request, agent_id):
     run_as_user: bool = request.data["run_as_user"]
     env_vars: list[str] = request.data["env_vars"]
     req_timeout = int(request.data["timeout"]) + 3
+    run_on_server: bool | None = request.data.get("run_on_server")
+
+    if run_on_server and not get_core_settings().server_scripts_enabled:
+        return notify_error("This feature is disabled.")
 
     AuditLog.audit_script_run(
         username=request.user.username,
@@ -767,6 +787,29 @@ def run_script(request, agent_id):
         username=request.user.username[:50],
     )
     history_pk = hist.pk
+
+    if run_on_server:
+        from core.utils import run_server_script
+
+        r = run_server_script(
+            body=script.script_body,
+            args=script.parse_script_args(agent, script.shell, args),
+            env_vars=script.parse_script_env_vars(agent, script.shell, env_vars),
+            shell=script.shell,
+            timeout=req_timeout,
+        )
+
+        ret = {
+            "stdout": r[0],
+            "stderr": r[1],
+            "execution_time": "{:.4f}".format(r[2]),
+            "retcode": r[3],
+        }
+
+        hist.script_results = {**ret, "id": history_pk}
+        hist.save(update_fields=["script_results"])
+
+        return Response(ret)
 
     if output == "wait":
         r = agent.run_script(
@@ -971,6 +1014,8 @@ def bulk(request):
         debug_info={"ip": request._client_ip},
     )
 
+    ht = "Check the History tab on the agent to view the results."
+
     if request.data["mode"] == "command":
         if request.data["shell"] == "custom" and request.data["custom_shell"]:
             shell = request.data["custom_shell"]
@@ -985,10 +1030,20 @@ def bulk(request):
             username=request.user.username[:50],
             run_as_user=request.data["run_as_user"],
         )
-        return Response(f"Command will now be run on {len(agents)} agents")
+        return Response(f"Command will now be run on {len(agents)} agents. {ht}")
 
     elif request.data["mode"] == "script":
         script = get_object_or_404(Script, pk=request.data["script"])
+
+        # prevent API from breaking for those who haven't updated payload
+        try:
+            custom_field_pk = request.data["custom_field"]
+            collector_all_output = request.data["collector_all_output"]
+            save_to_agent_note = request.data["save_to_agent_note"]
+        except KeyError:
+            custom_field_pk = None
+            collector_all_output = False
+            save_to_agent_note = False
 
         bulk_script_task.delay(
             script_pk=script.pk,
@@ -998,9 +1053,12 @@ def bulk(request):
             username=request.user.username[:50],
             run_as_user=request.data["run_as_user"],
             env_vars=request.data["env_vars"],
+            custom_field_pk=custom_field_pk,
+            collector_all_output=collector_all_output,
+            save_to_agent_note=save_to_agent_note,
         )
 
-        return Response(f"{script.name} will now be run on {len(agents)} agents")
+        return Response(f"{script.name} will now be run on {len(agents)} agents. {ht}")
 
     elif request.data["mode"] == "patch":
         if request.data["patchMode"] == "install":

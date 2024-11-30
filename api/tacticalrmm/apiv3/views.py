@@ -12,14 +12,16 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import User
-from agents.models import Agent, AgentHistory
+from agents.models import Agent, AgentHistory, Note
 from agents.serializers import AgentHistorySerializer
+from alerts.tasks import cache_agents_alert_template
 from apiv3.utils import get_agent_config
 from autotasks.models import AutomatedTask, TaskResult
 from autotasks.serializers import TaskGOGetSerializer, TaskResultSerializer
 from checks.constants import CHECK_DEFER, CHECK_RESULT_DEFER
 from checks.models import Check, CheckResult
 from checks.serializers import CheckRunnerGetSerializer
+from core.tasks import sync_mesh_perms_task
 from core.utils import (
     download_mesh_agent,
     get_core_settings,
@@ -31,11 +33,14 @@ from logs.models import DebugLog, PendingAction
 from software.models import InstalledSoftware
 from tacticalrmm.constants import (
     AGENT_DEFER,
+    TRMM_MAX_REQUEST_SIZE,
+    AgentHistoryType,
     AgentMonType,
     AgentPlat,
     AuditActionType,
     AuditObjType,
     CheckStatus,
+    CustomFieldModel,
     DebugLogType,
     GoArch,
     MeshAgentIdent,
@@ -338,6 +343,12 @@ class TaskRunner(APIView):
             AutomatedTask.objects.select_related("custom_field"), pk=pk
         )
 
+        content_length = request.META.get("CONTENT_LENGTH")
+        if content_length and int(content_length) > TRMM_MAX_REQUEST_SIZE:
+            request.data["stdout"] = ""
+            request.data["stderr"] = "Content truncated due to excessive request size."
+            request.data["retcode"] = 1
+
         # get task result or create if doesn't exist
         try:
             task_result = (
@@ -356,7 +367,7 @@ class TaskRunner(APIView):
 
         AgentHistory.objects.create(
             agent=agent,
-            type=AuditActionType.TASK_RUN,
+            type=AgentHistoryType.TASK_RUN,
             command=task.name,
             script_results=request.data,
         )
@@ -426,8 +437,8 @@ class MeshExe(APIView):
 
         try:
             return download_mesh_agent(dl_url)
-        except:
-            return notify_error("Unable to download mesh agent exe")
+        except Exception as e:
+            return notify_error(f"Unable to download mesh agent: {e}")
 
 
 class NewAgent(APIView):
@@ -481,6 +492,8 @@ class NewAgent(APIView):
         )
 
         ret = {"pk": agent.pk, "token": token.key}
+        sync_mesh_perms_task.delay()
+        cache_agents_alert_template.delay()
         return Response(ret)
 
 
@@ -559,12 +572,49 @@ class AgentHistoryResult(APIView):
     permission_classes = [IsAuthenticated]
 
     def patch(self, request, agentid, pk):
+        content_length = request.META.get("CONTENT_LENGTH")
+        if content_length and int(content_length) > TRMM_MAX_REQUEST_SIZE:
+
+            request.data["script_results"]["stdout"] = ""
+            request.data["script_results"][
+                "stderr"
+            ] = "Content truncated due to excessive request size."
+            request.data["script_results"]["retcode"] = 1
+
         hist = get_object_or_404(
-            AgentHistory.objects.filter(agent__agent_id=agentid), pk=pk
+            AgentHistory.objects.select_related("custom_field").filter(
+                agent__agent_id=agentid
+            ),
+            pk=pk,
         )
         s = AgentHistorySerializer(instance=hist, data=request.data, partial=True)
         s.is_valid(raise_exception=True)
         s.save()
+
+        if hist.custom_field:
+            if hist.custom_field.model == CustomFieldModel.AGENT:
+                field = hist.custom_field.get_or_create_field_value(hist.agent)
+            elif hist.custom_field.model == CustomFieldModel.CLIENT:
+                field = hist.custom_field.get_or_create_field_value(hist.agent.client)
+            elif hist.custom_field.model == CustomFieldModel.SITE:
+                field = hist.custom_field.get_or_create_field_value(hist.agent.site)
+
+            r = request.data["script_results"]["stdout"]
+            value = (
+                r.strip()
+                if hist.collector_all_output
+                else r.strip().split("\n")[-1].strip()
+            )
+
+            field.save_to_field(value)
+
+        if hist.save_to_agent_note:
+            Note.objects.create(
+                agent=hist.agent,
+                user=request.user,
+                note=request.data["script_results"]["stdout"],
+            )
+
         return Response("ok")
 
 

@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from agents.models import Agent
     from checks.models import Check
 
+from tacticalrmm.helpers import has_script_actions, has_webhook
 from tacticalrmm.models import PermissionQuerySet
 from tacticalrmm.utils import (
     bitdays_to_string,
@@ -151,7 +152,7 @@ class AutomatedTask(BaseAuditModel):
 
         # get old task if exists
         old_task = AutomatedTask.objects.get(pk=self.pk) if self.pk else None
-        super(AutomatedTask, self).save(old_model=old_task, *args, **kwargs)
+        super().save(old_model=old_task, *args, **kwargs)
 
         # check if fields were updated that require a sync to the agent and set status to notsynced
         if old_task:
@@ -174,10 +175,7 @@ class AutomatedTask(BaseAuditModel):
             cache.delete_many_pattern("site_*_tasks")
             cache.delete_many_pattern("agent_*_tasks")
 
-        super(AutomatedTask, self).delete(
-            *args,
-            **kwargs,
-        )
+        super().delete(*args, **kwargs)
 
     @property
     def schedule(self) -> Optional[str]:
@@ -248,16 +246,20 @@ class AutomatedTask(BaseAuditModel):
             "name": self.win_task_name,
             "overwrite_task": True,
             "enabled": self.enabled,
-            "trigger": self.task_type
-            if self.task_type != TaskType.CHECK_FAILURE
-            else TaskType.MANUAL,
+            "trigger": (
+                self.task_type
+                if self.task_type != TaskType.CHECK_FAILURE
+                else TaskType.MANUAL
+            ),
             "multiple_instances": self.task_instance_policy or 0,
-            "delete_expired_task_after": self.remove_if_not_scheduled
-            if self.expire_date
-            else False,
-            "start_when_available": self.run_asap_after_missed
-            if self.task_type != TaskType.RUN_ONCE
-            else True,
+            "delete_expired_task_after": (
+                self.remove_if_not_scheduled if self.expire_date else False
+            ),
+            "start_when_available": (
+                self.run_asap_after_missed
+                if self.task_type != TaskType.RUN_ONCE
+                else True
+            ),
         }
 
         if self.task_type in (
@@ -445,18 +447,19 @@ class AutomatedTask(BaseAuditModel):
         return "ok"
 
     def should_create_alert(self, alert_template=None):
+        has_autotask_notification = (
+            self.dashboard_alert or self.email_alert or self.text_alert
+        )
+        has_alert_template_notification = alert_template and (
+            alert_template.task_always_alert
+            or alert_template.task_always_email
+            or alert_template.task_always_text
+        )
         return (
-            self.dashboard_alert
-            or self.email_alert
-            or self.text_alert
-            or (
-                alert_template
-                and (
-                    alert_template.task_always_alert
-                    or alert_template.task_always_email
-                    or alert_template.task_always_text
-                )
-            )
+            has_autotask_notification
+            or has_alert_template_notification
+            or has_webhook(alert_template, "task")
+            or has_script_actions(alert_template, "task")
         )
 
 
@@ -466,6 +469,7 @@ class TaskResult(models.Model):
 
     objects = PermissionQuerySet.as_manager()
 
+    id = models.BigAutoField(primary_key=True)
     agent = models.ForeignKey(
         "agents.Agent",
         related_name="taskresults",

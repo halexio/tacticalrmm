@@ -1,5 +1,6 @@
 import smtplib
 from contextlib import suppress
+from email.headerregistry import Address
 from email.message import EmailMessage
 from typing import TYPE_CHECKING, List, Optional, cast
 
@@ -19,6 +20,8 @@ from tacticalrmm.constants import (
     CustomFieldModel,
     CustomFieldType,
     DebugLogLevel,
+    URLActionRestMethod,
+    URLActionType,
 )
 
 if TYPE_CHECKING:
@@ -44,6 +47,7 @@ class CoreSettings(BaseAuditModel):
     smtp_from_email = models.CharField(
         max_length=255, blank=True, default="from@example.com"
     )
+    smtp_from_name = models.CharField(max_length=255, null=True, blank=True)
     smtp_host = models.CharField(max_length=255, blank=True, default="smtp.gmail.com")
     smtp_host_user = models.CharField(
         max_length=255, blank=True, default="admin@example.com"
@@ -72,7 +76,8 @@ class CoreSettings(BaseAuditModel):
     mesh_device_group = models.CharField(
         max_length=255, null=True, blank=True, default="TacticalRMM"
     )
-    mesh_disable_auto_login = models.BooleanField(default=False)
+    mesh_company_name = models.CharField(max_length=255, null=True, blank=True)
+    sync_mesh_with_trmm = models.BooleanField(default=True)
     agent_auto_update = models.BooleanField(default=True)
     workstation_policy = models.ForeignKey(
         "automation.Policy",
@@ -102,6 +107,13 @@ class CoreSettings(BaseAuditModel):
     open_ai_model = models.CharField(
         max_length=255, blank=True, default="gpt-3.5-turbo"
     )
+    enable_server_scripts = models.BooleanField(default=True)
+    enable_server_webterminal = models.BooleanField(default=False)
+    notify_on_info_alerts = models.BooleanField(default=False)
+    notify_on_warning_alerts = models.BooleanField(default=True)
+
+    block_local_user_logon = models.BooleanField(default=False)
+    sso_enabled = models.BooleanField(default=False)
 
     def save(self, *args, **kwargs) -> None:
         from alerts.tasks import cache_agents_alert_template
@@ -119,9 +131,23 @@ class CoreSettings(BaseAuditModel):
                 self.mesh_token = settings.MESH_TOKEN_KEY
 
         old_settings = type(self).objects.get(pk=self.pk) if self.pk else None
-        super(BaseAuditModel, self).save(*args, **kwargs)
 
         if old_settings:
+            # fail safe to not lock out user logons
+            if not self.sso_enabled and self.block_local_user_logon:
+                self.block_local_user_logon = False
+
+            if old_settings.sso_enabled != self.sso_enabled and self.sso_enabled:
+                from core.utils import token_is_valid
+
+                _, valid = token_is_valid()
+                if not valid:
+                    raise ValidationError("")
+
+        super().save(*args, **kwargs)
+
+        if old_settings:
+
             if (
                 old_settings.alert_template != self.alert_template
                 or old_settings.server_policy != self.server_policy
@@ -143,6 +169,11 @@ class CoreSettings(BaseAuditModel):
 
     def __str__(self) -> str:
         return "Global Site Settings"
+
+    @property
+    def mesh_api_superuser(self) -> str:
+        # must be lowercase otherwise mesh api breaks
+        return self.mesh_username.lower()
 
     @property
     def sms_is_configured(self) -> bool:
@@ -177,6 +208,28 @@ class CoreSettings(BaseAuditModel):
 
         return False
 
+    @property
+    def server_scripts_enabled(self) -> bool:
+        if (
+            getattr(settings, "HOSTED", False)
+            or getattr(settings, "TRMM_DISABLE_SERVER_SCRIPTS", False)
+            or getattr(settings, "DEMO", False)
+        ):
+            return False
+
+        return self.enable_server_scripts
+
+    @property
+    def web_terminal_enabled(self) -> bool:
+        if (
+            getattr(settings, "HOSTED", False)
+            or getattr(settings, "TRMM_DISABLE_WEB_TERMINAL", False)
+            or getattr(settings, "DEMO", False)
+        ):
+            return False
+
+        return self.enable_server_webterminal
+
     def send_mail(
         self,
         subject: str,
@@ -207,7 +260,14 @@ class CoreSettings(BaseAuditModel):
         try:
             msg = EmailMessage()
             msg["Subject"] = subject
-            msg["From"] = from_address
+
+            if self.smtp_from_name:
+                msg["From"] = Address(
+                    display_name=self.smtp_from_name, addr_spec=from_address
+                )
+            else:
+                msg["From"] = from_address
+
             msg["To"] = email_recipients
             msg.set_content(body)
 
@@ -305,6 +365,7 @@ class CustomField(BaseAuditModel):
         default=list,
     )
     hide_in_ui = models.BooleanField(default=False)
+    hide_in_summary = models.BooleanField(default=False)
 
     class Meta:
         unique_together = (("model", "name"),)
@@ -355,7 +416,7 @@ class CodeSignToken(models.Model):
         if not self.pk and CodeSignToken.objects.exists():
             raise ValidationError("There can only be one CodeSignToken instance")
 
-        super(CodeSignToken, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
     @property
     def is_valid(self) -> bool:
@@ -410,9 +471,19 @@ class GlobalKVStore(BaseAuditModel):
 
 
 class URLAction(BaseAuditModel):
-    name = models.CharField(max_length=25)
-    desc = models.CharField(max_length=100, null=True, blank=True)
+    name = models.CharField(max_length=255)
+    desc = models.TextField(null=True, blank=True)
     pattern = models.TextField()
+    action_type = models.CharField(
+        max_length=10, choices=URLActionType.choices, default=URLActionType.WEB
+    )
+    rest_method = models.CharField(
+        max_length=10,
+        choices=URLActionRestMethod.choices,
+        default=URLActionRestMethod.POST,
+    )
+    rest_body = models.TextField(null=True, blank=True, default="")
+    rest_headers = models.TextField(null=True, blank=True, default="")
 
     def __str__(self):
         return self.name
@@ -422,47 +493,3 @@ class URLAction(BaseAuditModel):
         from .serializers import URLActionSerializer
 
         return URLActionSerializer(action).data
-
-
-RUN_ON_CHOICES = (
-    ("client", "Client"),
-    ("site", "Site"),
-    ("agent", "Agent"),
-    ("once", "Once"),
-)
-
-SCHEDULE_CHOICES = (("daily", "Daily"), ("weekly", "Weekly"), ("monthly", "Monthly"))
-
-
-""" class GlobalTask(models.Model):
-    script = models.ForeignKey(
-        "scripts.Script",
-        null=True,
-        blank=True,
-        related_name="script",
-        on_delete=models.SET_NULL,
-    )
-    script_args = ArrayField(
-        models.CharField(max_length=255, null=True, blank=True),
-        null=True,
-        blank=True,
-        default=list,
-    )
-    custom_field = models.OneToOneField(
-        "core.CustomField",
-        related_name="globaltask",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-    )
-    timeout = models.PositiveIntegerField(default=120)
-    retcode = models.IntegerField(null=True, blank=True)
-    stdout = models.TextField(null=True, blank=True)
-    stderr = models.TextField(null=True, blank=True)
-    execution_time = models.CharField(max_length=100, default="0.0000")
-    run_schedule = models.CharField(
-        max_length=25, choices=SCHEDULE_CHOICES, default="once"
-    )
-    run_on = models.CharField(
-        max_length=25, choices=RUN_ON_CHOICES, default="once"
-    ) """

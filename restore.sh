@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-SCRIPT_VERSION="56"
+SCRIPT_VERSION="61"
 SCRIPT_URL='https://raw.githubusercontent.com/amidaware/tacticalrmm/master/restore.sh'
 
 sudo apt update
@@ -13,8 +13,9 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SCRIPTS_DIR='/opt/trmm-community-scripts'
-PYTHON_VER='3.11.6'
+PYTHON_VER='3.11.8'
 SETTINGS_FILE='/rmm/api/tacticalrmm/tacticalrmm/settings.py'
+local_settings='/rmm/api/tacticalrmm/tacticalrmm/local_settings.py'
 
 TMP_FILE=$(mktemp -p "" "rmmrestore_XXXXXXXXXX")
 curl -s -L "${SCRIPT_URL}" >${TMP_FILE}
@@ -28,6 +29,13 @@ if [ "${SCRIPT_VERSION}" -ne "${NEW_VER}" ]; then
 fi
 
 rm -f $TMP_FILE
+
+export DEBIAN_FRONTEND=noninteractive
+
+if [ -d /rmm/api/tacticalrmm ]; then
+  echo -ne "${RED}ERROR: Existing trmm installation found. The restore script must be run on a clean server, please re-read the docs.${NC}\n"
+  exit 1
+fi
 
 arch=$(uname -m)
 if [[ "$arch" != "x86_64" ]] && [[ "$arch" != "aarch64" ]]; then
@@ -65,6 +73,16 @@ elif [[ "$osname" == "ubuntu" ]]; then
   fi
 else
   not_supported
+  exit 1
+fi
+
+if dpkg -l | grep -qi turnkey; then
+  echo -ne "${RED}Turnkey linux is not supported. Please use the official debian/ubuntu ISO.${NC}\n"
+  exit 1
+fi
+
+if ps aux | grep -v grep | grep -qi webmin; then
+  echo -ne "${RED}Webmin running, should not be installed. Please use the official debian/ubuntu ISO.${NC}\n"
   exit 1
 fi
 
@@ -133,7 +151,7 @@ sudo npm install -g npm
 
 print_green 'Restoring Nginx'
 
-wget -qO - https://nginx.org/packages/keys/nginx_signing.key | sudo gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg
+wget -qO - https://nginx.org/keys/nginx_signing.key | sudo gpg --dearmor -o /etc/apt/keyrings/nginx-archive-keyring.gpg
 
 nginxrepo="$(
   cat <<EOF
@@ -396,7 +414,7 @@ mesh_pkg="$(
   cat <<EOF
 {
   "dependencies": {
-    "archiver": "5.3.1",
+    "archiver": "7.0.1",
     "meshcentral": "${MESH_VER}",
     "otplib": "10.2.3",
     "pg": "8.7.1",
@@ -428,8 +446,8 @@ sudo chmod +x /usr/local/bin/nats-api
 
 print_green 'Restoring the trmm database'
 
-pgusername=$(grep -w USER /rmm/api/tacticalrmm/tacticalrmm/local_settings.py | sed 's/^.*: //' | sed 's/.//' | sed -r 's/.{2}$//')
-pgpw=$(grep -w PASSWORD /rmm/api/tacticalrmm/tacticalrmm/local_settings.py | sed 's/^.*: //' | sed 's/.//' | sed -r 's/.{2}$//')
+pgusername=$(grep -w USER $local_settings | sed 's/^.*: //' | sed 's/.//' | sed -r 's/.{2}$//')
+pgpw=$(grep -w PASSWORD $local_settings | sed 's/^.*: //' | sed 's/.//' | sed -r 's/.{2}$//')
 
 sudo -iu postgres psql -c "CREATE DATABASE tacticalrmm"
 sudo -iu postgres psql -c "CREATE USER ${pgusername} WITH PASSWORD '${pgpw}'"
@@ -477,7 +495,6 @@ echo "Running management commands...please wait..."
 API=$(python manage.py get_config api)
 WEB_VERSION=$(python manage.py get_config webversion)
 FRONTEND=$(python manage.py get_config webdomain)
-webdomain=$(python manage.py get_config webdomain)
 meshdomain=$(python manage.py get_config meshdomain)
 WEBTAR_URL=$(python manage.py get_webtar_url)
 CERT_PUB_KEY=$(python manage.py get_config certfile)
@@ -603,9 +620,9 @@ sudo ln -s /etc/nginx/sites-available/rmm.conf /etc/nginx/sites-enabled/rmm.conf
 
 HAS_11=$(grep 127.0.1.1 /etc/hosts)
 if [[ $HAS_11 ]]; then
-  sudo sed -i "/127.0.1.1/s/$/ ${API} ${webdomain} ${meshdomain}/" /etc/hosts
+  sudo sed -i "/127.0.1.1/s/$/ ${API} ${FRONTEND} ${meshdomain}/" /etc/hosts
 else
-  echo "127.0.1.1 ${API} ${webdomain} ${meshdomain}" | sudo tee --append /etc/hosts >/dev/null
+  echo "127.0.1.1 ${API} ${FRONTEND} ${meshdomain}" | sudo tee --append /etc/hosts >/dev/null
 fi
 
 sudo systemctl enable nats.service
