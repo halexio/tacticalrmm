@@ -214,6 +214,18 @@ class AuditLog(models.Model):
         )
 
     @staticmethod
+    def audit_user_login_successful_sso(
+        username: str, provider: str, debug_info: Dict[Any, Any] = {}
+    ) -> None:
+        AuditLog.objects.create(
+            username=username,
+            object_type=AuditObjType.USER,
+            action=AuditActionType.LOGIN,
+            message=f"{username} logged in successfully through SSO Provider {provider}",
+            debug_info=debug_info,
+        )
+
+    @staticmethod
     def audit_url_action(
         username: str,
         urlaction: "URLAction",
@@ -297,7 +309,7 @@ class AuditLog(models.Model):
             target = f"on all agents within client: {client.name}"
         elif affected["target"] == "site":
             site = Site.objects.get(pk=affected["site"])
-            target = f"on all agents within site: {site.client.name}\\{site.name}"
+            target = f"on all agents within site: {site.client.name} - {site.name}"
         elif affected["target"] == "agents":
             agents = Agent.objects.filter(agent_id__in=affected["agents"]).values_list(
                 "hostname", flat=True
@@ -462,7 +474,7 @@ class PendingAction(models.Model):
             PAAction.RUN_PATCH_SCAN,
             PAAction.RUN_PATCH_INSTALL,
         ):
-            return f"{self.action_type}"
+            return str(self.action_type)
 
         return None
 

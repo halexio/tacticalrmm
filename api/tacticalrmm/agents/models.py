@@ -969,8 +969,8 @@ class Agent(BaseAuditModel):
         return bool(
             has_agent_notification
             or has_alert_template_notification
-            or has_webhook(alert_template)
-            or has_script_actions(alert_template)
+            or has_webhook(alert_template, "agent")
+            or has_script_actions(alert_template, "agent")
         )
 
     def send_outage_email(self) -> None:
@@ -1122,6 +1122,15 @@ class AgentHistory(models.Model):
         on_delete=models.SET_NULL,
     )
     script_results = models.JSONField(null=True, blank=True)
+    custom_field = models.ForeignKey(
+        "core.CustomField",
+        null=True,
+        blank=True,
+        related_name="history",
+        on_delete=models.SET_NULL,
+    )
+    collector_all_output = models.BooleanField(default=False)
+    save_to_agent_note = models.BooleanField(default=False)
 
     def __str__(self) -> str:
         return f"{self.agent.hostname} - {self.type}"

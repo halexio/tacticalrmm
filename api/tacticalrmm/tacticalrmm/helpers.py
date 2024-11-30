@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import os
 import random
 import secrets
 import string
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
 from cryptography import x509
@@ -101,10 +102,6 @@ def date_is_in_past(*, datetime_obj: "datetime", agent_tz: str) -> bool:
     return djangotime.now() > utc_time
 
 
-def get_webdomain() -> str:
-    return urlparse(settings.CORS_ORIGIN_WHITELIST[0]).netloc
-
-
 def rand_range(min: int, max: int) -> float:
     """
     Input is milliseconds.
@@ -140,11 +137,29 @@ def days_until_cert_expires() -> int:
     return delta.days
 
 
-def has_webhook(alert_templ: "AlertTemplate") -> bool:
+def has_webhook(
+    alert_templ: AlertTemplate | None, instance: Literal["agent", "check", "task"]
+) -> bool:
     return bool(
-        alert_templ and (alert_templ.action_rest or alert_templ.resolved_action_rest)
+        alert_templ
+        and (alert_templ.action_rest or alert_templ.resolved_action_rest)
+        and (
+            (instance == "agent" and alert_templ.agent_script_actions)
+            or (instance == "check" and alert_templ.check_script_actions)
+            or (instance == "task" and alert_templ.task_script_actions)
+        )
     )
 
 
-def has_script_actions(alert_templ: "AlertTemplate") -> bool:
-    return bool(alert_templ and (alert_templ.action or alert_templ.resolved_action))
+def has_script_actions(
+    alert_templ: AlertTemplate | None, instance: Literal["agent", "check", "task"]
+) -> bool:
+    return bool(
+        alert_templ
+        and (alert_templ.action or alert_templ.resolved_action)
+        and (
+            (instance == "agent" and alert_templ.agent_script_actions)
+            or (instance == "check" and alert_templ.check_script_actions)
+            or (instance == "task" and alert_templ.task_script_actions)
+        )
+    )
