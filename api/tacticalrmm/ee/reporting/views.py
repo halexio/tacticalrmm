@@ -135,6 +135,7 @@ class GenerateReport(APIView):
                 ),
                 variables=template.template_variables,
                 dependencies=request.data["dependencies"],
+                user=request.user,
             )
 
             html_report = normalize_asset_url(html_report, format)
@@ -192,6 +193,7 @@ class GenerateReportPreview(APIView):
                 html_template=report_data.get("template_html"),
                 variables=report_data["template_variables"],
                 dependencies=report_data["dependencies"],
+                user=request.user,
             )
 
             if report_data["debug"]:
@@ -836,15 +838,10 @@ class QuerySchema(APIView):
     def get(self, request):
         schema_path = "static/reporting/schemas/query_schema.json"
 
-        if djangosettings.DEBUG:
-            try:
-                with open(djangosettings.BASE_DIR / schema_path, "r") as f:
-                    data = json.load(f)
+        try:
+            with open(djangosettings.BASE_DIR / schema_path, "r") as f:
+                data = json.load(f)
 
-                return JsonResponse(data)
-            except FileNotFoundError:
-                return notify_error("There was an error getting the file")
-        else:
-            response = HttpResponse()
-            response["X-Accel-Redirect"] = f"/{schema_path}"
-            return response
+            return JsonResponse(data)
+        except FileNotFoundError:
+            return notify_error("There was an error getting the file")
