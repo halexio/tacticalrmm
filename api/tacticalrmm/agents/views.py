@@ -72,6 +72,7 @@ from .permissions import (
     RunScriptPerms,
     SendCMDPerms,
     UpdateAgentPerms,
+    AgentRegistryPerms,
 )
 from .serializers import (
     AgentCustomFieldSerializer,
@@ -1302,7 +1303,7 @@ def wol(request, agent_id):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def browse_registry(request, agent_id):
     agent = get_object_or_404(Agent, agent_id=agent_id)
     path = request.query_params.get("path", "Computer").strip()
