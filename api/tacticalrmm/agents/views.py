@@ -1305,7 +1305,7 @@ def wol(request, agent_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def browse_registry(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
     path = request.query_params.get("path", "Computer").strip()
     page = int(request.query_params.get("page", 1))
     page_size = int(request.query_params.get("page_size", 200))
@@ -1341,9 +1341,9 @@ def browse_registry(request, agent_id):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_key(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = request.data.get("path", "").strip()
     if not path:
@@ -1366,9 +1366,9 @@ def create_registry_key(request, agent_id):
 
 
 @api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_key(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = request.query_params.get("path", "").strip()
     if not path:
@@ -1391,10 +1391,10 @@ def delete_registry_key(request, agent_id):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_key(request, agent_id):
 
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     old_path = (request.data.get("old_path") or "").strip()
     new_path = (request.data.get("new_path") or "").strip()
@@ -1432,9 +1432,9 @@ def rename_registry_key(request, agent_id):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
@@ -1480,9 +1480,9 @@ def create_registry_value(request, agent_id):
 
 
 @api_view(["DELETE"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = (request.query_params.get("path") or "").strip()
     val_name = request.query_params.get("name")
@@ -1514,9 +1514,9 @@ def delete_registry_value(request, agent_id):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = (request.data.get("path") or "").strip()
     old_name = request.data.get("old_name")
@@ -1558,9 +1558,9 @@ def rename_registry_value(request, agent_id):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, AgentRegistryPerms])
 def modify_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent, agent_id=agent_id)
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
