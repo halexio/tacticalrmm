@@ -5,7 +5,6 @@ import string
 import time
 from io import StringIO
 from pathlib import Path
-from packaging import version as pyver
 
 from django.conf import settings
 from django.db.models import Exists, OuterRef, Prefetch, Q
