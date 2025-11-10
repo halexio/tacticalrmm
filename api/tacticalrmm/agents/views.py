@@ -5,6 +5,7 @@ import string
 import time
 from io import StringIO
 from pathlib import Path
+from packaging import version as pyver
 
 from django.conf import settings
 from django.db.models import Exists, OuterRef, Prefetch, Q
@@ -1306,6 +1307,9 @@ def wol(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def browse_registry(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
+
     path = request.query_params.get("path", "Computer").strip()
     page = int(request.query_params.get("page", 1))
     page_size = int(request.query_params.get("page_size", 200))
@@ -1344,6 +1348,8 @@ def browse_registry(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_key(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = request.data.get("path", "").strip()
     if not path:
@@ -1369,6 +1375,8 @@ def create_registry_key(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_key(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = request.query_params.get("path", "").strip()
     if not path:
@@ -1395,6 +1403,8 @@ def delete_registry_key(request, agent_id):
 def rename_registry_key(request, agent_id):
 
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     old_path = (request.data.get("old_path") or "").strip()
     new_path = (request.data.get("new_path") or "").strip()
@@ -1435,6 +1445,8 @@ def rename_registry_key(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_value(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
@@ -1483,6 +1495,8 @@ def create_registry_value(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_value(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = (request.query_params.get("path") or "").strip()
     val_name = request.query_params.get("name")
@@ -1517,6 +1531,8 @@ def delete_registry_value(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_value(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = (request.data.get("path") or "").strip()
     old_name = request.data.get("old_name")
@@ -1561,6 +1577,8 @@ def rename_registry_value(request, agent_id):
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def modify_registry_value(request, agent_id):
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
+        return notify_error("This feature requires agent version 2.10.0 or higher.")
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
