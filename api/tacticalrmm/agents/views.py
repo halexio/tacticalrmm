@@ -20,6 +20,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from .utils import send_nats_command, get_validated_agent
 
 from core.tasks import sync_mesh_perms_task
 from core.utils import (
@@ -1305,31 +1306,25 @@ def wol(request, agent_id):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def browse_registry(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     path = request.query_params.get("path", "Computer").strip()
-    page = int(request.query_params.get("page", 1))
-    page_size = int(request.query_params.get("page_size", 200))
-
     if path.lower() == "computer":
         path = "Computer"
 
-    data = {
-        "func": "registry_browse",
-        "payload": {"path": path, "page": str(page), "page_size": str(page_size)},
-    }
     try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(str(e))
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 200))
+    except ValueError:
+        return notify_error("page and page_size must be integers")
 
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
+    payload = {"path": path, "page": str(page), "page_size": str(page_size)}
+    r = send_nats_command(agent, "registry_browse", payload, timeout=30)
 
-    if "error" in r:
-        return notify_error(r["error"])
+    if isinstance(r, Response):
+        return r
 
     return Response(
         {
@@ -1346,26 +1341,19 @@ def browse_registry(request, agent_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_key(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
-    path = request.data.get("path", "").strip()
+    path = (request.data.get("path") or "").strip()
     if not path:
         return notify_error("Registry path is required")
 
-    data = {"func": "registry_create_key", "payload": {"path": path}}
+    payload = {"path": path}
+    r = send_nats_command(agent, "registry_create_key", payload, timeout=30)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(f"NATS communication failed: {str(e)}")
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if "error" in r:
-        return notify_error(f"Registry key creation failed: {r['error']}")
+    if isinstance(r, Response):
+        return r
 
     return Response({"status": "success", "path": path})
 
@@ -1373,26 +1361,19 @@ def create_registry_key(request, agent_id):
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_key(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
-    path = request.query_params.get("path", "").strip()
+    path = (request.query_params.get("path") or "").strip()
     if not path:
         return notify_error("Registry path is required")
 
-    data = {"func": "registry_delete_key", "payload": {"path": path}}
+    payload = {"path": path}
+    r = send_nats_command(agent, "registry_delete_key", payload, timeout=30)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(f"NATS communication failed: {str(e)}")
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if "error" in r:
-        return notify_error(f"Registry key deletion failed: {r['error']}")
+    if isinstance(r, Response):
+        return r
 
     return Response({"status": "success", "deleted_path": path})
 
@@ -1400,36 +1381,23 @@ def delete_registry_key(request, agent_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_key(request, agent_id):
-
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     old_path = (request.data.get("old_path") or "").strip()
     new_path = (request.data.get("new_path") or "").strip()
 
     if not old_path or not new_path:
         return notify_error("Both 'old_path' and 'new_path' are required")
-
     if old_path == new_path:
         return notify_error("Old and new path cannot be the same")
 
-    data = {
-        "func": "registry_rename_key",
-        "payload": {"old_path": old_path, "new_path": new_path},
-    }
+    payload = {"old_path": old_path, "new_path": new_path}
+    r = send_nats_command(agent, "registry_rename_key", payload, timeout=60)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=60))  # may take longer
-    except Exception as e:
-        # logger.exception("NATS communication failed during rename_registry_key")
-        return notify_error(f"NATS communication failed: {str(e)}")
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if isinstance(r, dict) and "error" in r:
-        return notify_error(f"Registry key rename failed: {r['error']}")
+    if isinstance(r, Response):
+        return r
 
     return Response(
         {
@@ -1443,14 +1411,14 @@ def rename_registry_key(request, agent_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def create_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
     val_type = (request.data.get("type") or "").strip().upper()
-    val_data = request.data.get("data")  # optional
+    val_data = request.data.get("data")
 
     if not path:
         return notify_error("Registry path is required")
@@ -1463,21 +1431,14 @@ def create_registry_value(request, agent_id):
         "path": path,
         "type": val_type,
         "name": val_name,
-        "data": val_data,  # optional
+        "data": val_data,
     }
 
-    data = {"func": "registry_create_value", "payload": payload}
+    r = send_nats_command(agent, "registry_create_value", payload, timeout=30)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(str(e))
+    if isinstance(r, Response):
+        return r
 
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if isinstance(r, dict) and "error" in r:
-        return notify_error(r["error"])
     return Response(
         {
             "status": "success",
@@ -1493,9 +1454,9 @@ def create_registry_value(request, agent_id):
 @api_view(["DELETE"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def delete_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     path = (request.query_params.get("path") or "").strip()
     val_name = request.query_params.get("name")
@@ -1505,23 +1466,11 @@ def delete_registry_value(request, agent_id):
     if not val_name:
         return notify_error("Registry value name is required")
 
-    payload = {
-        "path": path,
-        "name": val_name,
-    }
+    payload = {"path": path, "name": val_name}
+    r = send_nats_command(agent, "registry_delete_value", payload, timeout=30)
 
-    data = {"func": "registry_delete_value", "payload": payload}
-
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(str(e))
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if isinstance(r, dict) and "error" in r:
-        return notify_error(r["error"])
+    if isinstance(r, Response):
+        return r
 
     return Response({"status": "success", "name": val_name})
 
@@ -1529,9 +1478,9 @@ def delete_registry_value(request, agent_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def rename_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     path = (request.data.get("path") or "").strip()
     old_name = request.data.get("old_name")
@@ -1543,6 +1492,8 @@ def rename_registry_value(request, agent_id):
         return notify_error("Old value name is required")
     if not new_name:
         return notify_error("New value name is required")
+    if old_name == new_name:
+        return notify_error("Old and new value names cannot be the same")
 
     payload = {
         "path": path,
@@ -1550,18 +1501,10 @@ def rename_registry_value(request, agent_id):
         "new_name": new_name,
     }
 
-    data = {"func": "registry_rename_value", "payload": payload}
+    r = send_nats_command(agent, "registry_rename_value", payload, timeout=30)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(str(e))
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if isinstance(r, dict) and "error" in r:
-        return notify_error(r["error"])
+    if isinstance(r, Response):
+        return r
 
     return Response(
         {
@@ -1575,9 +1518,9 @@ def rename_registry_value(request, agent_id):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated, AgentRegistryPerms])
 def modify_registry_value(request, agent_id):
-    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
-    if pyver.parse(agent.version) < pyver.parse("2.10.0"):
-        return notify_error("This feature requires agent version 2.10.0 or higher.")
+    agent = get_validated_agent(agent_id)
+    if isinstance(agent, Response):
+        return agent
 
     path = (request.data.get("path") or "").strip()
     val_name = request.data.get("name")
@@ -1598,18 +1541,10 @@ def modify_registry_value(request, agent_id):
         "data": val_data,
     }
 
-    data = {"func": "registry_modify_value", "payload": payload}
+    r = send_nats_command(agent, "registry_modify_value", payload, timeout=30)
 
-    try:
-        r = asyncio.run(agent.nats_cmd(data, timeout=30))
-    except Exception as e:
-        return notify_error(str(e))
-
-    if r == "timeout":
-        return notify_error("Unable to contact the agent")
-
-    if isinstance(r, dict) and "error" in r:
-        return notify_error(r["error"])
+    if isinstance(r, Response):
+        return r
 
     return Response(
         {

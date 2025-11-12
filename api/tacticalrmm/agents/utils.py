@@ -8,6 +8,10 @@ from django.http import FileResponse
 
 from core.utils import get_core_settings, get_mesh_device_id, get_mesh_ws_url
 from tacticalrmm.constants import MeshAgentIdent
+from django.shortcuts import get_object_or_404
+from tacticalrmm.helpers import notify_error
+from tacticalrmm.constants import AGENT_DEFER
+from packaging import version as pyver
 
 
 def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
@@ -74,3 +78,34 @@ def generate_linux_install(
         return FileResponse(
             fp.read(), as_attachment=True, filename="linux_agent_install.sh"
         )
+
+
+def get_validated_agent(agent_id, min_version="2.9.0"):
+    from .models import Agent
+
+    agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
+
+    if pyver.parse(agent.version) < pyver.parse(min_version):
+        return notify_error(
+            f"This feature requires agent version {min_version} or higher."
+        )
+
+    return agent
+
+
+def send_nats_command(agent, func: str, payload: dict, timeout: int = 60):
+    try:
+        data = {"func": func, "payload": payload}
+        response = asyncio.run(agent.nats_cmd(data, timeout=timeout))
+    except Exception as e:
+        return notify_error(f"NATS communication failed: {str(e)}")
+
+    if response == "timeout":
+        return notify_error("Unable to contact the agent")
+
+    if isinstance(response, dict) and "error" in response:
+        return notify_error(
+            f"{func.replace('_', ' ').title()} failed: {response['error']}"
+        )
+
+    return response
