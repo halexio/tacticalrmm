@@ -16,7 +16,7 @@ class BaseRegistryAPITest(TacticalTestCase):
         self.authenticate()
         self.setup_coresettings()
         self.agent = baker.make(Agent)
-        self.agent = baker.make(Agent, version="2.10.1")
+        self.agent = baker.make(Agent, version="2.10.0")
 
         if not self.api_name:
             raise ValueError("Subclasses must define api_name")

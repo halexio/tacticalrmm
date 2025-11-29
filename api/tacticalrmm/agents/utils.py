@@ -79,7 +79,7 @@ def generate_linux_install(
         )
 
 
-def get_validated_agent(agent_id, min_version="2.9.0"):
+def get_validated_agent(agent_id, min_version="2.10.0"):
     from .models import Agent
 
     agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agent_id)
