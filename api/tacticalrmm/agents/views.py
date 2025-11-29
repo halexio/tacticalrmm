@@ -20,7 +20,6 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from .utils import send_nats_command, get_validated_agent
 
 from core.tasks import sync_mesh_perms_task
 from core.utils import (
@@ -62,6 +61,7 @@ from .permissions import (
     AgentHistoryPerms,
     AgentNotesPerms,
     AgentPerms,
+    AgentRegistryPerms,
     AgentWOLPerms,
     EvtLogPerms,
     InstallAgentPerms,
@@ -73,7 +73,6 @@ from .permissions import (
     RunScriptPerms,
     SendCMDPerms,
     UpdateAgentPerms,
-    AgentRegistryPerms,
 )
 from .serializers import (
     AgentCustomFieldSerializer,
@@ -88,6 +87,7 @@ from .tasks import (
     run_script_email_results_task,
     send_agent_update_task,
 )
+from .utils import get_validated_agent, send_nats_command
 
 
 class GetAgents(APIView):

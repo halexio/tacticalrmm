@@ -5,13 +5,12 @@ from pathlib import Path
 
 from django.conf import settings
 from django.http import FileResponse
+from django.shortcuts import get_object_or_404
+from packaging import version as pyver
 
 from core.utils import get_core_settings, get_mesh_device_id, get_mesh_ws_url
-from tacticalrmm.constants import MeshAgentIdent
-from django.shortcuts import get_object_or_404
+from tacticalrmm.constants import AGENT_DEFER, MeshAgentIdent
 from tacticalrmm.helpers import notify_error
-from tacticalrmm.constants import AGENT_DEFER
-from packaging import version as pyver
 
 
 def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:

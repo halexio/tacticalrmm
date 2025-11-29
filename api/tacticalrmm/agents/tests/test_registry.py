@@ -1,9 +1,10 @@
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
+
 from django.urls import reverse
 from model_bakery import baker
 
-from tacticalrmm.test import TacticalTestCase
 from agents.models import Agent
+from tacticalrmm.test import TacticalTestCase
 
 
 class BaseRegistryAPITest(TacticalTestCase):
