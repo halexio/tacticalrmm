@@ -276,9 +276,13 @@ class AutomatedTask(BaseAuditModel):
                 self.remove_if_not_scheduled if self.expire_date else False
             ),
             "start_when_available": (
-                self.run_asap_after_missed
-                if self.task_type != TaskType.RUN_ONCE
-                else True
+                False
+                if self.task_type == TaskType.MANUAL
+                else (
+                    True
+                    if self.task_type == TaskType.RUN_ONCE
+                    else self.run_asap_after_missed
+                )
             ),
         }
 
