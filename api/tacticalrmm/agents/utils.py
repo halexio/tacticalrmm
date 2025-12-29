@@ -8,8 +8,15 @@ from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from packaging import version as pyver
 
+from checks.models import CheckResult
 from core.utils import get_core_settings, get_mesh_device_id, get_mesh_ws_url
-from tacticalrmm.constants import AGENT_DEFER, MeshAgentIdent
+from tacticalrmm.constants import (
+    AGENT_DEFER,
+    AlertSeverity,
+    CheckStatus,
+    CheckType,
+    MeshAgentIdent,
+)
 from tacticalrmm.helpers import notify_error
 
 
@@ -108,3 +115,47 @@ def send_nats_command(agent, func: str, payload: dict, timeout: int = 60):
         )
 
     return response
+
+
+def calculate_agent_checks(agent) -> dict:
+    total, passing, failing, warning, info = 0, 0, 0, 0, 0
+
+    for check in agent.get_checks_with_policies(exclude_overridden=True):
+        total += 1
+        if (
+            not hasattr(check.check_result, "status")
+            or isinstance(check.check_result, CheckResult)
+            and check.check_result.status == CheckStatus.PASSING
+        ):
+            passing += 1
+        elif (
+            isinstance(check.check_result, CheckResult)
+            and check.check_result.status == CheckStatus.FAILING
+        ):
+            alert_severity = (
+                check.check_result.alert_severity
+                if check.check_type
+                in (
+                    CheckType.MEMORY,
+                    CheckType.CPU_LOAD,
+                    CheckType.DISK_SPACE,
+                    CheckType.SCRIPT,
+                )
+                else check.alert_severity
+            )
+            if alert_severity == AlertSeverity.ERROR:
+                failing += 1
+            elif alert_severity == AlertSeverity.WARNING:
+                warning += 1
+            elif alert_severity == AlertSeverity.INFO:
+                info += 1
+
+    ret = {
+        "total": total,
+        "passing": passing,
+        "failing": failing,
+        "warning": warning,
+        "info": info,
+        "has_failing_checks": failing > 0 or warning > 0,
+    }
+    return ret
