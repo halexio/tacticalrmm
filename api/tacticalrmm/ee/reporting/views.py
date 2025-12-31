@@ -200,7 +200,7 @@ class EmailReport(APIView):
 
 
 class GenerateReportPreview(APIView):
-    permission_classes = [IsAuthenticated, GenerateReportPerms]
+    permission_classes = [IsAuthenticated, ReportingPerms]
 
     class InputRequest:
         template_md: str
