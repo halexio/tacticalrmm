@@ -37,7 +37,7 @@ LATEST_AGENT_VER = "2.9.1"
 
 MESH_VER = "1.1.32"
 
-NATS_SERVER_VER = "2.12.2"
+NATS_SERVER_VER = "2.12.3"
 
 # Install Nushell on the agent
 # https://github.com/nushell/nushell
@@ -66,7 +66,7 @@ NUSHELL_ENABLE_CONFIG = False
 INSTALL_DENO = True
 # Version to download. If INSTALL_DENO_URL is not provided, the file will be downloaded from GitHub,
 # extracted and installed.
-INSTALL_DENO_VERSION = "v1.44.4"
+INSTALL_DENO_VERSION = "v1.46.3"
 # URL to download directly. This is expected to be the direct URL, unauthenticated, uncompressed, ready to be installed.
 # Use {OS}, {ARCH} and {VERSION} to specify the GOOS, GOARCH and INSTALL_DENO_VERSION respectively.
 # Windows: The ".exe" extension will be added automatically.
