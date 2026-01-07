@@ -42,6 +42,7 @@ from tacticalrmm.constants import (
     AGENT_DEFER,
     AGENT_STATUS_ONLINE,
     AGENT_STATUS_OVERDUE,
+    CACHE_DB_FIELDS_TASK_LOCK,
     RESOLVE_ALERTS_LOCK,
     SYNC_MESH_PERMS_TASK_LOCK,
     SYNC_SCHED_TASK_LOCK,
@@ -406,23 +407,27 @@ def _get_failing_data(agents: "QuerySet[Agent]") -> dict[str, bool]:
     return data
 
 
-@app.task
-def cache_db_fields_task() -> None:
-    qs = _get_agent_qs()
-    # update client/site failing check fields and agent counts
-    for site in Site.objects.all():
-        agents = qs.filter(site=site)
-        site.failing_checks = _get_failing_data(agents)
-        site.save(update_fields=["failing_checks"])
+@app.task(bind=True)
+def cache_db_fields_task(self) -> None | str:
+    with redis_lock(CACHE_DB_FIELDS_TASK_LOCK, self.app.oid) as acquired:
+        if not acquired:
+            return f"{self.app.oid} still running"
 
-    for client in Client.objects.all():
-        agents = qs.filter(site__client=client)
-        client.failing_checks = _get_failing_data(agents)
-        client.save(update_fields=["failing_checks"])
+        qs = _get_agent_qs()
+        # update client/site failing check fields and agent counts
+        for site in Site.objects.all():
+            agents = qs.filter(site=site)
+            site.failing_checks = _get_failing_data(agents)
+            site.save(update_fields=["failing_checks"])
 
-    for agent in qs.iterator(chunk_size=100):
-        data = calculate_agent_checks(agent)
-        cache.set(f"{AGENT_CHECKS_CACHE_PREFIX}{agent.pk}", data, 86400)
+        for client in Client.objects.all():
+            agents = qs.filter(site__client=client)
+            client.failing_checks = _get_failing_data(agents)
+            client.save(update_fields=["failing_checks"])
+
+        for agent in qs.iterator(chunk_size=100):
+            data = calculate_agent_checks(agent)
+            cache.set(f"{AGENT_CHECKS_CACHE_PREFIX}{agent.pk}", data, 86400)
 
 
 @app.task(bind=True)
