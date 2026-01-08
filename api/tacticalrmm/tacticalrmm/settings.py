@@ -26,14 +26,14 @@ AUTH_USER_MODEL = "accounts.User"
 TRMM_VERSION = "1.3.2-dev"
 
 # https://github.com/amidaware/tacticalrmm-web
-WEB_VERSION = "0.101.56"
+WEB_VERSION = "0.101.58"
 
 # bump this version everytime vue code is changed
 # to alert user they need to manually refresh their browser
-APP_VER = "0.0.201"
+APP_VER = "0.0.202"
 
 # https://github.com/amidaware/rmmagent
-LATEST_AGENT_VER = "2.9.1"
+LATEST_AGENT_VER = "2.10.0"
 
 MESH_VER = "1.1.32"
 
