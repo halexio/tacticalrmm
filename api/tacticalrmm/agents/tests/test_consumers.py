@@ -43,6 +43,7 @@ class TestCommandStreamConsumer(TacticalTestCase):
 
     @patch.object(CommandStreamConsumer, "send_json", autospec=True)
     def test_creates_agent_history_and_auditlog(self, mock_send_json):
+        self.consumer.authorized = True
         message = {
             "cmd": "ping google.com",
             "shell": "cmd",
@@ -66,6 +67,7 @@ class TestCommandStreamConsumer(TacticalTestCase):
 
     @patch.object(CommandStreamConsumer, "send_json", autospec=True)
     def test_receive_json_invalid_payload(self, mock_send_json):
+        self.consumer.authorized = True
         message = {"shell": "cmd"}  # Missing 'cmd'
         async_to_sync(self.consumer.receive_json)(message)
         mock_send_json.assert_called_with(

@@ -105,6 +105,7 @@ class CommandStreamConsumer(AsyncJsonWebsocketConsumer):
         self.agent_id = None
         self.group_name = None
         self.cmd_id = None
+        self.authorized = False
 
     async def connect(self):
         """Handle websocket connection."""
@@ -149,6 +150,7 @@ class CommandStreamConsumer(AsyncJsonWebsocketConsumer):
 
         # Don’t create a group yet, cmd_id not known
         await self.accept()
+        self.authorized = True
 
     async def disconnect(self, close_code):
         """Cleanup on disconnect."""
@@ -170,6 +172,10 @@ class CommandStreamConsumer(AsyncJsonWebsocketConsumer):
             await self.channel_layer.group_discard(self.group_name, self.channel_name)
 
     async def receive_json(self, content, **kwargs):
+        if not getattr(self, "authorized", False):
+            await self.close(4403)
+            return
+
         agent = await self.get_agent(self.agent_id)
         try:
             cmd = content["cmd"]
