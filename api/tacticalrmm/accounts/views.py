@@ -26,6 +26,7 @@ from accounts.utils import is_root_user
 from core.tasks import sync_mesh_perms_task
 from logs.models import AuditLog
 from tacticalrmm.helpers import notify_error
+from tacticalrmm.mixins import GenericPermsViewMixin
 from tacticalrmm.utils import get_core_settings
 
 from .models import APIKey, Role, User
@@ -334,7 +335,7 @@ class UserActions(APIView):
         )
 
 
-class TOTPSetup(APIView):
+class TOTPSetup(GenericPermsViewMixin, APIView):
     # totp setup
     def post(self, request):
         user = request.user
@@ -347,7 +348,7 @@ class TOTPSetup(APIView):
         return Response(False)
 
 
-class UserUI(APIView):
+class UserUI(GenericPermsViewMixin, APIView):
     def patch(self, request):
         serializer = UserUISerializer(
             instance=request.user, data=request.data, partial=True
