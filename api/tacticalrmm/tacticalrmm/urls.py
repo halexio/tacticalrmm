@@ -5,7 +5,6 @@ from knox import views as knox_views
 from accounts.views import CheckCredsV2, LoginViewV2
 from agents.consumers import CommandStreamConsumer
 
-# from agents.consumers import SendCMD
 from core.consumers import DashInfo, TerminalConsumer
 from core.views import home
 from ee.sso.urls import allauth_urls
@@ -82,7 +81,6 @@ if getattr(settings, "SWAGGER_ENABLED", False):
 
 ws_urlpatterns = [
     path("ws/dashinfo/", DashInfo.as_asgi()),
-    # path("ws/sendcmd/", SendCMD.as_asgi()),
     path("ws/agent/<str:agent_id>/cmd/", CommandStreamConsumer.as_asgi()),
 ]
 
