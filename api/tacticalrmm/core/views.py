@@ -6,6 +6,7 @@ import psutil
 import requests
 from cryptography import x509
 from django.conf import settings
+from django.db import IntegrityError
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone as djangotime
@@ -39,13 +40,21 @@ from tacticalrmm.permissions import (
     _has_perm_on_site,
 )
 
-from .models import CodeSignToken, CoreSettings, CustomField, GlobalKVStore, URLAction
+from .models import (
+    CodeSignToken,
+    CoreSettings,
+    CustomField,
+    GlobalKVStore,
+    Schedule,
+    URLAction,
+)
 from .permissions import (
     CodeSignPerms,
     CoreSettingsPerms,
     CustomFieldPerms,
     GlobalKeyStorePerms,
     RunServerScriptPerms,
+    SchedulePerms,
     ServerMaintPerms,
     URLActionPerms,
     WebTerminalPerms,
@@ -55,6 +64,7 @@ from .serializers import (
     CoreSettingsSerializer,
     CustomFieldSerializer,
     KeyStoreSerializer,
+    ScheduleSerializer,
     URLActionSerializer,
 )
 
@@ -98,6 +108,7 @@ def version(request):
 
 
 @api_view()
+@permission_classes([IsAuthenticated, ServerMaintPerms])
 def clear_cache(request):
     from core.utils import clear_entire_cache
 
@@ -107,6 +118,9 @@ def clear_cache(request):
 
 @api_view()
 def dashboard_info(request):
+    if request.user.is_installer_user:
+        return notify_error("")
+
     from core.utils import token_is_expired
     from tacticalrmm.utils import get_latest_trmm_ver, runcmd_placeholder_text
 
@@ -489,6 +503,46 @@ class RunTestURLAction(APIView):
         return Response({"url": replaced_url, "result": result, "body": replaced_body})
 
 
+class GetAddSchedule(APIView):
+    permission_classes = [IsAuthenticated, SchedulePerms]
+
+    def get(self, request):
+        schedules = Schedule.objects.all()
+        return Response(ScheduleSerializer(schedules, many=True).data)
+
+    def post(self, request):
+        serializer = ScheduleSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data)
+
+
+class UpdateDeleteSchedule(APIView):
+    permission_classes = [IsAuthenticated, SchedulePerms]
+
+    def put(self, request, pk):
+        schedule = get_object_or_404(Schedule, pk=pk)
+
+        serializer = ScheduleSerializer(
+            instance=schedule, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data)
+
+    def delete(self, request, pk):
+        schedule = get_object_or_404(Schedule, pk=pk)
+
+        try:
+            schedule.delete()
+        except IntegrityError:
+            return notify_error("This schedule is currently in use.")
+
+        return Response(pk)
+
+
 class TestRunServerScript(APIView):
     permission_classes = [IsAuthenticated, RunServerScriptPerms]
 
@@ -511,19 +565,28 @@ class TestRunServerScript(APIView):
             shell=request.data["shell"],
         )
 
-        AuditLog.audit_test_script_run(
-            username=request.user.username,
-            agent=None,
-            script_body=code,
-            debug_info={"ip": request._client_ip},
-        )
-
         ret = {
             "stdout": stdout,
             "stderr": stderr,
             "execution_time": f"{execution_time:.4f}",
             "retcode": retcode,
         }
+
+        audit_before = {
+            "body": code,
+            "args": request.data["args"],
+            "env_vars": request.data["env_vars"],
+            "timeout": request.data["timeout"],
+            "shell": request.data["shell"],
+        }
+
+        AuditLog.audit_test_script_run(
+            username=request.user.username,
+            before_value=audit_before,
+            after_value=ret,
+            agent=None,
+            debug_info={"ip": request._client_ip},
+        )
 
         return Response(ret)
 

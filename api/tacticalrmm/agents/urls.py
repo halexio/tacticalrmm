@@ -25,6 +25,7 @@ urlpatterns = [
     path("<agent:agent_id>/pendingactions/", PendingActions.as_view()),
     # agent remote background
     path("<agent:agent_id>/meshcentral/", views.AgentMeshCentral.as_view()),
+    path("<agent:agent_id>/<str:port>/webvnc/", views.WebVNC.as_view()),
     path("<agent:agent_id>/meshcentral/recover/", views.AgentMeshCentral.as_view()),
     path("<agent:agent_id>/processes/", views.AgentProcesses.as_view()),
     path("<agent:agent_id>/processes/<int:pid>/", views.AgentProcesses.as_view()),
@@ -45,4 +46,40 @@ urlpatterns = [
     path("bulkrecovery/", views.bulk_agent_recovery),
     path("scripthistory/", views.ScriptRunHistory.as_view()),
     path("<agent:agent_id>/wol/", views.wol),
+    path("<agent:agent_id>/registry/", views.browse_registry, name="browse_registry"),
+    path(
+        "<agent:agent_id>/registry/create-key/",
+        views.create_registry_key,
+        name="create_registry_key",
+    ),
+    path(
+        "<agent:agent_id>/registry/delete-key/",
+        views.delete_registry_key,
+        name="delete_registry_key",
+    ),
+    path(
+        "<agent:agent_id>/registry/rename-key/",
+        views.rename_registry_key,
+        name="rename_registry_key",
+    ),
+    path(
+        "<agent:agent_id>/registry/create-value/",
+        views.create_registry_value,
+        name="create_registry_value",
+    ),
+    path(
+        "<agent:agent_id>/registry/delete-value/",
+        views.delete_registry_value,
+        name="delete_registry_value",
+    ),
+    path(
+        "<agent:agent_id>/registry/rename-value/",
+        views.rename_registry_value,
+        name="rename_registry_value",
+    ),
+    path(
+        "<agent:agent_id>/registry/modify-value/",
+        views.modify_registry_value,
+        name="modify_registry_value",
+    ),
 ]

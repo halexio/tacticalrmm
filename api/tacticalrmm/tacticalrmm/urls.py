@@ -3,11 +3,12 @@ from django.urls import include, path, register_converter
 from knox import views as knox_views
 
 from accounts.views import CheckCredsV2, LoginViewV2
-from ee.sso.urls import allauth_urls
+from agents.consumers import CommandStreamConsumer
 
 # from agents.consumers import SendCMD
 from core.consumers import DashInfo, TerminalConsumer
 from core.views import home
+from ee.sso.urls import allauth_urls
 
 
 class AgentIDConverter:
@@ -28,7 +29,6 @@ urlpatterns = [
     path("v2/login/", LoginViewV2.as_view()),
     path("logout/", knox_views.LogoutView.as_view()),
     path("logoutall/", knox_views.LogoutAllView.as_view()),
-    path("api/v3/", include("apiv3.urls")),
     path("clients/", include("clients.urls")),
     path("agents/", include("agents.urls")),
     path("checks/", include("checks.urls")),
@@ -42,8 +42,14 @@ urlpatterns = [
     path("scripts/", include("scripts.urls")),
     path("alerts/", include("alerts.urls")),
     path("accounts/", include("accounts.urls")),
-    path("reporting/", include("ee.reporting.urls")),
 ]
+
+if not getattr(settings, "DEMO", False):
+    urlpatterns += (
+        path("api/v3/", include("apiv3.urls")),
+        path("api/v4/", include("apiv4.urls")),
+        path("reporting/", include("ee.reporting.urls")),
+    )
 
 if not getattr(settings, "TRMM_DISABLE_SSO", False):
     urlpatterns += (
@@ -77,6 +83,7 @@ if getattr(settings, "SWAGGER_ENABLED", False):
 ws_urlpatterns = [
     path("ws/dashinfo/", DashInfo.as_asgi()),
     # path("ws/sendcmd/", SendCMD.as_asgi()),
+    path("ws/agent/<str:agent_id>/cmd/", CommandStreamConsumer.as_asgi()),
 ]
 
 if not (

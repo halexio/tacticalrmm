@@ -33,13 +33,23 @@ from rest_framework.serializers import (
     JSONField,
     ListField,
     ModelSerializer,
+    ReadOnlyField,
     Serializer,
     ValidationError,
 )
 from rest_framework.views import APIView
+
+import ee.reporting.tasks
 from tacticalrmm.utils import notify_error
 
-from .models import ReportAsset, ReportDataQuery, ReportHTMLTemplate, ReportTemplate
+from .models import (
+    ReportAsset,
+    ReportDataQuery,
+    ReportHistory,
+    ReportHTMLTemplate,
+    ReportSchedule,
+    ReportTemplate,
+)
 from .permissions import GenerateReportPerms, ReportingPerms
 from .storage import report_assets_fs
 from .utils import (
@@ -47,10 +57,13 @@ from .utils import (
     _import_base_template,
     _import_report_template,
     base64_encode_assets,
+    build_report_link,
     generate_html,
     generate_pdf,
     normalize_asset_url,
     prep_variables_for_template,
+    run_report,
+    run_scheduled_report,
 )
 
 
@@ -125,43 +138,69 @@ class GenerateReport(APIView):
         if format not in ("pdf", "html", "plaintext"):
             return notify_error("Report format is incorrect.")
 
-        try:
-            html_report, _ = generate_html(
-                template=template.template_md,
-                template_type=template.type,
-                css=template.template_css or "",
-                html_template=(
-                    template.template_html.id if template.template_html else None
-                ),
-                variables=template.template_variables,
-                dependencies=request.data["dependencies"],
-                user=request.user,
+        report, error, _ = run_report(
+            template=template,
+            dependencies=request.data["dependencies"],
+            format=format,
+            user=request.user,
+        )
+
+        if error:
+            return notify_error(error)
+
+        if format != "pdf":
+            return Response(report)
+        else:
+            return FileResponse(
+                ContentFile(report),
+                content_type="application/pdf",
+                filename=f"{template.name}.pdf",
             )
 
-            html_report = normalize_asset_url(html_report, format)
 
-            if format != "pdf":
-                return Response(html_report)
-            else:
-                pdf_bytes = generate_pdf(html=html_report)
+class EmailReport(APIView):
+    permission_classes = [IsAuthenticated, GenerateReportPerms]
 
-                return FileResponse(
-                    ContentFile(pdf_bytes),
-                    content_type="application/pdf",
-                    filename=f"{template.name}.pdf",
-                )
+    def post(self, request: Request, pk: int) -> Response:
+        template = get_object_or_404(ReportTemplate, pk=pk)
 
-        except TemplateError as error:
-            if hasattr(error, "lineno"):
-                return notify_error(f"Line {error.lineno}: {error.message}")
-            else:
-                return notify_error(str(error))
-        except Exception as error:
-            return notify_error(str(error))
+        format = request.data["format"]
+
+        if format not in ("pdf", "html", "plaintext"):
+            return notify_error("Report format is incorrect.")
+
+        report, error, history = run_report(
+            template=template,
+            dependencies=request.data["dependencies"],
+            format=format,
+            user=request.user,
+        )
+
+        if error:
+            return notify_error(error)
+
+        ee.reporting.tasks.email_report.delay(
+            template_name=template.name,
+            report_link=build_report_link(history.id, format),
+            recipients=request.data["email_recipients"],
+            attachment=report,
+            attachment_type=format,
+            subject=request.data["email_settings"].get("subject"),
+            body=request.data["email_settings"].get("body"),
+            attachment_name=request.data["email_settings"].get("attachment_name"),
+            attachment_extension=request.data["email_settings"].get(
+                "attachment_extension"
+            ),
+            include_report_link=request.data["email_settings"].get(
+                "include_report_link"
+            ),
+        )
+
+        return Response()
 
 
 class GenerateReportPreview(APIView):
-    permission_classes = [IsAuthenticated, GenerateReportPerms]
+    permission_classes = [IsAuthenticated, ReportingPerms]
 
     class InputRequest:
         template_md: str
@@ -185,7 +224,10 @@ class GenerateReportPreview(APIView):
 
     def post(self, request: Request) -> Union[FileResponse, Response]:
         try:
-            report_data = self._parse_and_validate_request_data(request.data)
+            serializer = self.InputSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            report_data = serializer.validated_data
+
             html_report, variables = generate_html(
                 template=report_data["template_md"],
                 template_type=report_data["type"],
@@ -205,11 +247,6 @@ class GenerateReportPreview(APIView):
             return self._handle_template_error(error)
         except Exception as error:
             return notify_error(str(error))
-
-    def _parse_and_validate_request_data(self, data: Dict[str, Any]) -> Any:
-        serializer = self.InputSerializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        return serializer.validated_data
 
     def _process_debug_response(
         self, html_report: str, variables: Dict[str, Any]
@@ -319,6 +356,161 @@ class ImportReportTemplate(APIView):
             return notify_error(str(e))
 
 
+class ReportScheduleSerializer(ModelSerializer):
+    report_template_name = ReadOnlyField(source="report_template.name")
+    schedule_name = ReadOnlyField(source="schedule.name")
+
+    class Meta:
+        model = ReportSchedule
+        fields = [
+            "id",
+            "name",
+            "enabled",
+            "report_template",
+            "report_template_name",
+            "format",
+            "schedule",
+            "schedule_name",
+            "email_recipients",
+            "dependencies",
+            "send_report_email",
+            "last_run",
+            "email_settings",
+            "timezone",
+        ]
+
+
+class GetAddReportSchedule(APIView):
+    permission_classes = [IsAuthenticated, ReportingPerms]
+    queryset = ReportSchedule.objects.all()
+    serializer_class = ReportScheduleSerializer
+
+    def get(self, request: Request) -> Response:
+        schedules = ReportSchedule.objects.all()
+        return Response(ReportScheduleSerializer(schedules, many=True).data)
+
+    def post(self, request: Request) -> Response:
+        serializer = ReportScheduleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        response = serializer.save()
+
+        return Response(ReportScheduleSerializer(response).data)
+
+
+class GetEditDeleteReportSchedule(APIView):
+    permission_classes = [IsAuthenticated, ReportingPerms]
+    queryset = ReportSchedule.objects.all()
+    serializer_class = ReportScheduleSerializer
+
+    def get(self, request: Request, pk: int) -> Response:
+        schedule = get_object_or_404(ReportSchedule, pk=pk)
+
+        return Response(ReportScheduleSerializer(schedule).data)
+
+    def put(self, request: Request, pk: int) -> Response:
+        schedule = get_object_or_404(ReportSchedule, pk=pk)
+
+        serializer = ReportScheduleSerializer(
+            instance=schedule, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        response = serializer.save()
+
+        return Response(ReportScheduleSerializer(response).data)
+
+    def delete(self, request: Request, pk: int) -> Response:
+        get_object_or_404(ReportSchedule, pk=pk).delete()
+
+        return Response()
+
+
+class RunReportSchedule(APIView):
+    permission_classes = [IsAuthenticated, ReportingPerms]
+
+    def post(self, request: Request, pk: int) -> Response:
+        schedule = get_object_or_404(ReportSchedule, pk=pk)
+
+        _, error = run_scheduled_report(schedule=schedule, user=request.user)
+
+        if error:
+            return notify_error(error)
+
+        return Response()
+
+
+class ReportHistorySerializer(ModelSerializer):
+    report_template_name = ReadOnlyField(source="report_template.name")
+    report_template_type = ReadOnlyField(source="report_template.type")
+
+    class Meta:
+        model = ReportHistory
+        fields = [
+            "id",
+            "report_template",
+            "report_template_name",
+            "report_template_type",
+            "run_by",
+            "error_data",
+            "date_created",
+        ]
+
+
+class GetReportHistory(APIView):
+    permission_classes = [IsAuthenticated, ReportingPerms]
+    queryset = ReportHistory.objects.all()
+    serializer_class = ReportHistorySerializer
+
+    def get(self, request: Request) -> Response:
+        history = ReportHistory.objects.all()
+        return Response(ReportHistorySerializer(history, many=True).data)
+
+
+class DeleteReportHistory(APIView):
+    permission_classes = [IsAuthenticated, ReportingPerms]
+    queryset = ReportHistory.objects.all()
+    serializer_class = ReportHistorySerializer
+
+    def delete(self, request: Request, pk: int) -> Response:
+        get_object_or_404(ReportHistory, pk=pk).delete()
+
+        return Response()
+
+
+class RunReportHistory(APIView):
+    permission_classes = [IsAuthenticated, GenerateReportPerms]
+
+    def post(self, request, pk: int) -> Response:
+        history = get_object_or_404(ReportHistory, pk=pk)
+
+        format = request.data["format"]
+
+        if format not in ("pdf", "html", "plaintext"):
+            return notify_error("Report format is incorrect.")
+
+        try:
+
+            html_report = normalize_asset_url(history.report_data, format)
+
+            if format != "pdf":
+                return Response(html_report)
+            else:
+                pdf_bytes = generate_pdf(html=html_report)
+
+                return FileResponse(
+                    ContentFile(pdf_bytes),
+                    content_type="application/pdf",
+                    filename=f"{history.report_template.name}_{history.date_created}.pdf",
+                )
+
+        except TemplateError as error:
+            if hasattr(error, "lineno"):
+                return notify_error(f"Line {error.lineno}: {error.message}")
+            else:
+                return notify_error(str(error))
+        except Exception as error:
+            return notify_error(str(error))
+
+
 class GetAllowedValues(APIView):
     permission_classes = [IsAuthenticated, GenerateReportPerms]
 
@@ -367,12 +559,17 @@ class GetAllowedValues(APIView):
         return items
 
 
+TEMPLATE_REPO = (
+    "https://raw.githubusercontent.com/amidaware/reporting-templates/master/"
+)
+
+
 class SharedTemplatesRepo(APIView):
     permission_classes = [IsAuthenticated, ReportingPerms]
 
     def get(self, request: Request) -> Response:
         try:
-            url = "https://raw.githubusercontent.com/amidaware/reporting-templates/master/index.json"
+            url = f"{TEMPLATE_REPO}index.json"
             response = requests.get(url, timeout=15)
             files = response.json()
             return Response(
@@ -395,7 +592,11 @@ class SharedTemplatesRepo(APIView):
 
         try:
             for template in templates:
-                response = requests.get(template["url"], timeout=10)
+                template_url = template.get("url")
+                if not template_url or not template_url.startswith(TEMPLATE_REPO):
+                    return notify_error("Invalid template")
+
+                response = requests.get(template_url, timeout=10)
                 template_obj = response.json()
 
                 # import base template if exists
@@ -469,8 +670,8 @@ class GetAllAssets(APIView):
         only_folders = True if only_folders and only_folders == "true" else False
 
         try:
-            os.chdir(report_assets_fs.base_location)
-            response = [self._walk_folder_and_return_node(".", only_folders)]
+            base_loc = str(report_assets_fs.base_location)
+            response = [self._walk_folder_and_return_node(base_loc, only_folders)]
             return Response(response)
         except FileNotFoundError:
             return notify_error("Unable to process request")
@@ -479,39 +680,51 @@ class GetAllAssets(APIView):
     def _walk_folder_and_return_node(self, path: str, only_folders: bool = False):
         # pull report assets from the database so we can pair with the file system assets
         assets = ReportAsset.objects.all()
+        base_root = str(report_assets_fs.base_location)
 
         for current_dir, subdirs, files in os.walk(path):
-            current_dir = "Report Assets" if current_dir == "." else current_dir
+            # if current dir is base, rel path is "." else subfolder
+            rel_path = os.path.relpath(current_dir, base_root)
+
+            if rel_path == ".":
+                display_name = "Report Assets"
+                clean_path = ""
+            else:
+                display_name = os.path.basename(current_dir)
+                clean_path = rel_path
+
             node = {
                 "type": "folder",
-                "name": current_dir.replace("./", ""),
-                "path": path.replace("./", ""),
+                "name": display_name,
+                "path": clean_path,
                 "children": [],
                 "selectable": False,
                 "icon": "folder",
                 "iconColor": "yellow-9",
             }
+
             for dirname in subdirs:
-                dirpath = f"{path}/{dirname}"
+                dirpath = os.path.join(current_dir, dirname)
                 node["children"].append(
-                    # recursively call
                     self._walk_folder_and_return_node(dirpath, only_folders)
                 )
 
             if not only_folders:
                 for filename in files:
-                    path = f"{current_dir}/{filename}".replace("./", "").replace(
-                        "Report Assets/", ""
+                    file_rel_path = (
+                        filename
+                        if rel_path == "."
+                        else os.path.join(rel_path, filename)
                     )
+
                     try:
-                        # need to remove the relative path
-                        id = assets.get(file=path).id
+                        id = assets.get(file=file_rel_path).id
                         node["children"].append(
                             {
                                 "id": id,
                                 "type": "file",
                                 "name": filename,
-                                "path": path,
+                                "path": file_rel_path,
                                 "icon": "description",
                             }
                         )

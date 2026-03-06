@@ -29,7 +29,7 @@ from core.utils import (
     get_mesh_ws_url,
     get_meshagent_url,
 )
-from logs.models import DebugLog, PendingAction
+from logs.models import DebugLog
 from software.models import InstalledSoftware
 from tacticalrmm.constants import (
     AGENT_DEFER,
@@ -44,7 +44,6 @@ from tacticalrmm.constants import (
     DebugLogType,
     GoArch,
     MeshAgentIdent,
-    PAStatus,
     TaskRunStatus,
 )
 from tacticalrmm.helpers import make_random_password, notify_error
@@ -329,8 +328,21 @@ class TaskRunner(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, pk, agentid):
-        agent = get_object_or_404(Agent.objects.defer(*AGENT_DEFER), agent_id=agentid)
-        task = get_object_or_404(AutomatedTask, pk=pk)
+        agent = get_object_or_404(
+            Agent.objects.select_related("policy", "site").defer(*AGENT_DEFER),
+            agent_id=agentid,
+        )
+        task = get_object_or_404(
+            AutomatedTask.objects.select_related("agent", "policy"), pk=pk
+        )
+
+        if task.agent:
+            if task.agent.agent_id != agent.agent_id:
+                return notify_error("")
+        elif task.policy:
+            if pk not in [t.pk for t in agent.get_tasks_with_policies()]:
+                return notify_error("")
+
         return Response(TaskGOGetSerializer(task, context={"agent": agent}).data)
 
     def patch(self, request, pk, agentid):
@@ -531,38 +543,6 @@ class Installer(APIView):
                 f"Old installer detected (version {ver} ). Latest version is {settings.LATEST_AGENT_VER} Please generate a new installer from the RMM"
             )
 
-        return Response("ok")
-
-
-class ChocoResult(APIView):
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def patch(self, request, pk):
-        action = get_object_or_404(PendingAction, pk=pk)
-        results: str = request.data["results"]
-
-        software_name = action.details["name"].lower()
-        success = [
-            "install",
-            "of",
-            software_name,
-            "was",
-            "successful",
-            "installed",
-        ]
-        duplicate = [software_name, "already", "installed", "--force", "reinstall"]
-        installed = False
-
-        if all(x in results.lower() for x in success):
-            installed = True
-        elif all(x in results.lower() for x in duplicate):
-            installed = True
-
-        action.details["output"] = results
-        action.details["installed"] = installed
-        action.status = PAStatus.COMPLETED
-        action.save(update_fields=["details", "status"])
         return Response("ok")
 
 

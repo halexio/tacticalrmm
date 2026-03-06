@@ -123,6 +123,7 @@ class Role(BaseAuditModel):
     can_recover_agents = models.BooleanField(default=False)
     can_list_agent_history = models.BooleanField(default=False)
     can_send_wol = models.BooleanField(default=False)
+    can_use_registry = models.BooleanField(default=False)
 
     # core
     can_list_notes = models.BooleanField(default=False)
@@ -138,6 +139,8 @@ class Role(BaseAuditModel):
     can_use_webterm = models.BooleanField(default=False)
     can_view_global_keystore = models.BooleanField(default=False)
     can_edit_global_keystore = models.BooleanField(default=False)
+    can_view_schedules = models.BooleanField(default=False)
+    can_manage_schedules = models.BooleanField(default=False)
 
     # checks
     can_list_checks = models.BooleanField(default=False)

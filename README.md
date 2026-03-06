@@ -20,6 +20,7 @@ Demo database resets every hour. A lot of features are disabled for obvious reas
 - Teamviewer-like remote desktop control
 - Real-time remote shell
 - Remote file browser (download and upload files)
+- Windows Registry Editor
 - Remote command and script execution (batch, powershell, python, nushell and deno scripts)
 - Event log viewer
 - Services management
@@ -31,7 +32,8 @@ Demo database resets every hour. A lot of features are disabled for obvious reas
 
 ## Windows agent versions supported
 
-- Windows 7, 8.1, 10, 11, Server 2008R2, 2012R2, 2016, 2019, 2022
+- Windows 7, 8.1, 10, 11,
+- Server 2008R2, 2012R2, 2016, 2019, 2022, 2025
 
 ## Linux agent versions supported
 

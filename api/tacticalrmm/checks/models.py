@@ -106,13 +106,19 @@ class Check(BaseAuditModel):
         default=list,
     )
     info_return_codes = ArrayField(
-        models.PositiveIntegerField(),
+        models.BigIntegerField(),
         null=True,
         blank=True,
         default=list,
     )
     warning_return_codes = ArrayField(
-        models.PositiveIntegerField(),
+        models.BigIntegerField(),
+        null=True,
+        blank=True,
+        default=list,
+    )
+    success_return_codes = ArrayField(
+        models.PositiveBigIntegerField(),
         null=True,
         blank=True,
         default=list,
@@ -155,7 +161,7 @@ class Check(BaseAuditModel):
 
     def __str__(self):
         if self.agent:
-            return f"{self.agent.hostname} - {self.readable_desc}"
+            return f"{self.readable_desc}"
 
         return f"{self.policy.name} - {self.readable_desc}"
 
@@ -323,7 +329,7 @@ class CheckResult(models.Model):
     )
 
     def __str__(self):
-        return f"{self.agent.hostname} - {self.assigned_check}"
+        return f"{self.assigned_check}"
 
     def save(self, *args, **kwargs):
         # if check is a policy check clear cache on everything
@@ -427,6 +433,8 @@ class CheckResult(models.Model):
             elif data["retcode"] in check.warning_return_codes:
                 self.alert_severity = AlertSeverity.WARNING
                 self.status = CheckStatus.FAILING
+            elif data["retcode"] in check.success_return_codes:
+                self.status = CheckStatus.PASSING
             elif data["retcode"] != 0:
                 self.status = CheckStatus.FAILING
                 self.alert_severity = AlertSeverity.ERROR
@@ -655,7 +663,7 @@ class CheckResult(models.Model):
         CORE = get_core_settings()
 
         subject = f"{self.agent.client.name}, {self.agent.site.name}, {self} Resolved"
-        body = f"{self} is now back to normal"
+        body = f"{self.agent.client.name}, {self.agent.site.name}, {self} is now back to normal"
 
         CORE.send_mail(subject, body, alert_template=self.agent.alert_template)
 

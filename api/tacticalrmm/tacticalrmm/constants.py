@@ -21,6 +21,7 @@ class MeshAgentIdent(Enum):
 CORESETTINGS_CACHE_KEY = "core_settings"
 ROLE_CACHE_PREFIX = "role_"
 AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX = "agent_tbl_pendingactions_"
+AGENT_CHECKS_CACHE_PREFIX = "agent_checks_data_"
 
 AGENT_STATUS_ONLINE = "online"
 AGENT_STATUS_OFFLINE = "offline"
@@ -32,6 +33,7 @@ SYNC_SCHED_TASK_LOCK = "sync-sched-tasks-lock-key"
 AGENT_OUTAGES_LOCK = "agent-outages-task-lock-key"
 ORPHANED_WIN_TASK_LOCK = "orphaned-win-task-lock-key"
 SYNC_MESH_PERMS_TASK_LOCK = "sync-mesh-perms-lock-key"
+CACHE_DB_FIELDS_TASK_LOCK = "cache-db-fields-task-lock-key"
 
 TRMM_WS_MAX_SIZE = getattr(settings, "TRMM_WS_MAX_SIZE", 100 * 2**20)
 TRMM_MAX_REQUEST_SIZE = getattr(settings, "TRMM_MAX_REQUEST_SIZE", 10 * 2**20)
@@ -271,6 +273,17 @@ class URLActionRestMethod(models.TextChoices):
     PATCH = "patch", "Patch"
 
 
+class ScheduleType(models.TextChoices):
+    DAILY = "daily", "Daily"
+    WEEKLY = "weekly", "Weekly"
+    MONTHLY = "monthly", "Monthly"
+
+
+class MonthlyType(models.TextChoices):
+    WEEKS = "weeks", "Weeks"
+    DAYS = "days", "Days"
+
+
 # Agent db fields that are not needed for most queries, speeds up query
 AGENT_DEFER = (
     "wmi_detail",
@@ -296,6 +309,7 @@ ONLINE_AGENTS = (
     "overdue_time",
     "offline_time",
     "version",
+    "plat",
 )
 
 FIELDS_TRIGGER_TASK_UPDATE_AGENT = [
@@ -370,6 +384,7 @@ POLICY_CHECK_FIELDS_TO_COPY = [
     "ip",
     "script",
     "script_args",
+    "success_return_codes",
     "info_return_codes",
     "warning_return_codes",
     "timeout",
@@ -472,6 +487,21 @@ DEMO_NOT_ALLOWED = [
     {"name": "bulk_run_checks", "methods": ["GET"]},
     {"name": "OpenAICodeCompletion", "methods": ["POST"]},
     {"name": "wol", "methods": ["POST"]},
+    {"name": "Shutdown", "methods": ["POST"]},
+    {"name": "RunTestURLAction", "methods": ["POST"]},
+    {"name": "TestRunServerScript", "methods": ["POST"]},
+    {"name": "DeleteActiveLoginSession", "methods": ["DELETE"]},
+    {"name": "GetDeleteActiveLoginSessionsPerUser", "methods": ["DELETE"]},
+    {"name": "GetAddSSOProvider", "methods": ["POST"]},
+    {"name": "GetUpdateDeleteSSOProvider", "methods": ["PUT", "DELETE"]},
+    {"name": "DisconnectSSOAccount", "methods": ["DELETE"]},
+    {"name": "GetAccessToken", "methods": ["POST"]},
+    {"name": "GetUpdateSSOSettings", "methods": ["POST"]},
+    {"name": "ping", "methods": ["GET"]},
+    {"name": "GetAddAPIKeys", "methods": ["POST"]},
+    {"name": "GetUpdateDeleteAPIKey", "methods": ["PUT", "DELETE"]},
+    {"name": "WebVNC", "methods": ["GET"]},
+    {"name": "UninstallSoftware", "methods": ["POST"]},
 ]
 
 CONFIG_MGMT_CMDS = (

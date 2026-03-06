@@ -19,6 +19,7 @@ from meshctrl.utils import get_auth_token
 from requests.utils import requote_uri
 
 from tacticalrmm.constants import (
+    AGENT_CHECKS_CACHE_PREFIX,
     AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX,
     CORESETTINGS_CACHE_KEY,
     ROLE_CACHE_PREFIX,
@@ -39,6 +40,7 @@ class CoreSettingsNotFound(Exception):
 def clear_entire_cache() -> None:
     cache.delete_many_pattern(f"{ROLE_CACHE_PREFIX}*")
     cache.delete_many_pattern(f"{AGENT_TBL_PEND_ACTION_CNT_CACHE_PREFIX}*")
+    cache.delete_many_pattern(f"{AGENT_CHECKS_CACHE_PREFIX}*")
     cache.delete(CORESETTINGS_CACHE_KEY)
     cache.delete_many_pattern("site_*")
     cache.delete_many_pattern("agent_*")
@@ -274,9 +276,12 @@ def _run_url_rest_action(*, url: str, method, body: str, headers: str, instance=
 
 
 def run_url_rest_action(*, action_id: int, instance=None) -> tuple[str, int]:
-    import core.models
+    if getattr(settings, "DEMO", False):
+        return ("Not available in demo", 200)
 
-    action = core.models.URLAction.objects.get(pk=action_id)
+    from core.models import URLAction
+
+    action = URLAction.objects.get(pk=action_id)
     method = action.rest_method
     url = action.pattern
     body = action.rest_body
@@ -309,6 +314,9 @@ def run_test_url_rest_action(
     instance_type: Optional[str],
     instance_id: Optional[int],
 ) -> tuple[str, str, str]:
+    if getattr(settings, "DEMO", False):
+        return ("Not available in demo", "n/a", "n/a")
+
     lookup_instance = None
     if instance_type and instance_type in lookup_apps and instance_id:
         app, model = lookup_apps[instance_type]
@@ -333,12 +341,16 @@ def run_test_url_rest_action(
 def run_server_script(
     *, body: str, args: list[str], env_vars: list[str], shell: str, timeout: int
 ) -> tuple[str, str, float, int]:
+    disabled_ret = ("", "Error: this feature is disabled", 0.00, 1)
+    if getattr(settings, "DEMO", False):
+        return disabled_ret
+
     from core.models import CoreSettings
     from scripts.models import Script
 
     core = CoreSettings.objects.only("enable_server_scripts").first()
     if not core.server_scripts_enabled:  # type: ignore
-        return "", "Error: this feature is disabled", 0.00, 1
+        return disabled_ret
 
     body = Script.replace_with_snippets(body)
 
