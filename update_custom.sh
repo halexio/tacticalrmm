@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-SCRIPT_VERSION="155"
+SCRIPT_VERSION="158"
 SCRIPT_URL='https://raw.githubusercontent.com/halexio/tacticalrmm/master/update_custom.sh'
 LATEST_SETTINGS_URL='https://raw.githubusercontent.com/halexio/tacticalrmm/master/api/tacticalrmm/tacticalrmm/settings.py'
 YELLOW='\033[1;33m'
@@ -19,9 +19,9 @@ curl -s -L "${SCRIPT_URL}" >${TMP_FILE}
 NEW_VER=$(grep "^SCRIPT_VERSION" "$TMP_FILE" | awk -F'[="]' '{print $3}')
 
 if [ "${SCRIPT_VERSION}" -ne "${NEW_VER}" ]; then
-    printf >&2 "${YELLOW}Old update script detected, downloading and replacing with the latest version...${NC}\n"
-    wget -q "${SCRIPT_URL}" -O update_custom.sh
-    exec ${THIS_SCRIPT}
+  printf >&2 "${YELLOW}Old update script detected, downloading and replacing with the latest version...${NC}\n"
+  wget -q "${SCRIPT_URL}" -O "${THIS_SCRIPT}"
+  exec ${THIS_SCRIPT}
 fi
 
 rm -f $TMP_FILE
@@ -229,6 +229,41 @@ fi
 
 sudo sed -i 's/# server_names_hash_bucket_size.*/server_names_hash_bucket_size 256;/g' $nginxdefaultconf
 
+CHECK_NGINX_SITESENABLED=$(grep "sites-enabled" $nginxdefaultconf)
+if ! [[ $CHECK_NGINX_SITESENABLED ]]; then
+  printf >&2 "${GREEN}Fixing nginx config${NC}\n"
+  nginxconf="$(
+    cat <<EOF
+worker_rlimit_nofile 1000000;
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+        worker_connections 4096;
+}
+
+http {
+        sendfile on;
+        tcp_nopush on;
+        types_hash_max_size 2048;
+        server_names_hash_bucket_size 256;
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+        access_log /var/log/nginx/access.log;
+        error_log /var/log/nginx/error.log;
+        gzip on;
+        include /etc/nginx/conf.d/*.conf;
+        include /etc/nginx/sites-enabled/*;
+}
+EOF
+  )"
+  echo "${nginxconf}" | sudo tee $nginxdefaultconf >/dev/null
+fi
+
 if ! sudo nginx -t >/dev/null 2>&1; then
   sudo nginx -t
   echo -ne "\n"
@@ -336,8 +371,8 @@ fi
 
 # update from main repo
 cd /rmm
-git config user.email "hia_admin@hiaservices.com"
-git config user.name "HIA Administrator"
+git config user.email "alex@addonit.co.uk"
+git config user.name "Ionut Alexandru Hrebenciuc"
 git fetch
 git checkout master
 git reset --hard FETCH_HEAD
@@ -350,12 +385,12 @@ if [[ ! -d ${SCRIPTS_DIR} ]]; then
   sudo chown ${USER}:${USER} ${SCRIPTS_DIR}
   git clone https://github.com/amidaware/community-scripts.git ${SCRIPTS_DIR}/
   cd ${SCRIPTS_DIR}
-  git config user.email "hia_admin@hiaservices.com"
-  git config user.name "HIA Administrator"
+  git config user.email "alex@addonit.co.uk"
+  git config user.name "Ionut Alexandru Hrebenciuc"
 else
   cd ${SCRIPTS_DIR}
-  git config user.email "hia_admin@hiaservices.com"
-  git config user.name "HIA Administrator"
+  git config user.email "alex@addonit.co.uk"
+  git config user.name "Ionut Alexandru Hrebenciuc"
   git fetch
   git checkout main
   git reset --hard FETCH_HEAD
@@ -408,7 +443,7 @@ if [[ "${CURRENT_PIP_VER}" != "${LATEST_PIP_VER}" ]] || [[ "$force" = true ]]; t
   python3.11 -m venv env
   source /rmm/api/env/bin/activate
   cd /rmm/api/tacticalrmm
-  pip install --no-cache-dir --upgrade pip
+  pip install --no-cache-dir pip==25.1
   pip install --no-cache-dir setuptools==${SETUPTOOLS_VER} wheel==${WHEEL_VER}
   pip install --no-cache-dir -r requirements.txt
 else
@@ -505,8 +540,6 @@ server {
     ssl_prefer_server_ciphers on;
     ssl_ciphers EECDH+AESGCM:EDH+AESGCM;
     ssl_ecdh_curve secp384r1;
-    ssl_stapling on;
-    ssl_stapling_verify on;
     add_header X-Content-Type-Options nosniff;
     
     location /static/ {
@@ -564,6 +597,15 @@ EOF
   echo "${nginxrmm}" | sudo tee /etc/nginx/sites-available/rmm.conf >/dev/null
 fi
 
+for i in rmm frontend meshcentral; do
+  conf="/etc/nginx/sites-enabled/${i}.conf"
+  if grep -q "ssl_stapling" "$conf"; then
+    # backup to homedir first
+    cp "$conf" ~/${i}.nginx.bak.v1.2.0
+    sudo sed -i '/ssl_stapling/d' "$conf"
+  fi
+done
+
 CHECK_HOSTS=$(grep 127.0.1.1 /etc/hosts | grep "$API" | grep "$FRONTEND" | grep "$MESHDOMAIN")
 HAS_11=$(grep 127.0.1.1 /etc/hosts)
 
@@ -591,6 +633,51 @@ echo "window._env_ = {PROD_URL: \"https://${API}\"}" | sudo tee /var/www/rmm/dis
 sudo chown www-data:www-data -R /var/www/rmm/dist
 rm -f /tmp/${webtar}
 
+# disable compression if set to fix some mesh issues
+mesh_cfg='/meshcentral/meshcentral-data/config.json'
+
+check_jq_filter='
+( .settings // {} ) |
+to_entries |
+map(
+    select((.key | ascii_downcase) | IN("compression", "wscompression", "agentwscompression"))
+) |
+all(.value == false)
+'
+
+apply_jq_filter='
+.settings |= (
+    with_entries(
+        if ((.key | ascii_downcase) | IN("compression", "wscompression", "agentwscompression")) then
+            .value = false
+        else
+            .
+        end
+    )
+)
+'
+
+if ! which jq >/dev/null; then
+  echo "installing jq"
+  sudo apt-get install -y jq >/dev/null
+fi
+
+if which jq >/dev/null; then
+  if ! jq -e "$check_jq_filter" "$mesh_cfg" >/dev/null; then
+    echo "Disabling mesh compression"
+    # backup to homedir first
+    cp "$mesh_cfg" ~/meshcfg-$(date "+%Y%m%dT%H%M%S").bak
+    mesh_tmp=$(mktemp)
+    if jq "$apply_jq_filter" "$mesh_cfg" >"$mesh_tmp"; then
+      if [ -s "$mesh_tmp" ]; then
+        mv "$mesh_tmp" "$mesh_cfg"
+        sudo systemctl restart meshcentral
+      fi
+    fi
+    rm -f "$mesh_tmp"
+  fi
+fi
+
 for i in nats nats-api rmm daphne celery celerybeat nginx; do
   printf >&2 "${GREEN}Starting ${i} service${NC}\n"
   sudo systemctl start ${i}
@@ -598,57 +685,58 @@ done
 
 rm -f $TMP_SETTINGS
 printf >&2 "${GREEN}Update finished!${NC}\n"
-
-
-printf >&2 "${GREEN}Updating agents ${NC}\n"
-
-YELLOW='\033[1;33m'
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-NC='\033[0m'
-webhost=20.20.121.95
-
-cd /home/tactical
-rm -rf rmmagent
-git clone -b master https://github.com/halexio/rmmagent.git
-cd /home/tactical/rmmagent
-
-ver=`grep 'version = "' main.go | grep -o "[0-9.]\+"`
-rm -rf /home/tactical/rmmagent/v${ver}
-mkdir v${ver}
-
-plat='linux'
-ARCHS='amd64 386 arm64 arm'
-printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
-for i in ${ARCHS}; do
-    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
-    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
-done
-
-plat='windows'
-ARCHS='amd64 386'
-printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
-for i in ${ARCHS}; do
-    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
-    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}-noinstaller.exe"
-done
-
-plat='darwin'
-ARCHS='amd64 arm64'
-printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
-for i in ${ARCHS}; do
-    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
-    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
-done
-
-plat='freebsd'
-ARCHS='amd64 386 arm64 arm'
-printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
-for i in ${ARCHS}; do
-    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
-    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
-done
-
-
-printf >&2 "${YELLOW}Transferring all v${ver} binaries to the webhost...${NC}\n"
-rsync -av --progress --inplace /home/tactical/rmmagent/v${ver} hiaservices@${webhost}:/home/hiaservices/public_html/rmmagent
+#
+#
+#printf >&2 "${GREEN}Updating agents ${NC}\n"
+#
+#YELLOW='\033[1;33m'
+#GREEN='\033[0;32m'
+#RED='\033[0;31m'
+#NC='\033[0m'
+#webhost=20.20.121.95
+#
+#cd /home/tactical
+#rm -rf rmmagent
+#git clone -b master https://github.com/halexio/rmmagent.git
+#cd /home/tactical/rmmagent
+#
+#ver=`grep 'version = "' main.go | grep -o "[0-9.]\+"`
+#rm -rf /home/tactical/rmmagent/v${ver}
+#mkdir v${ver}
+#
+#plat='linux'
+#ARCHS='amd64 386 arm64 arm'
+#printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
+#for i in ${ARCHS}; do
+#    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
+#    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
+#done
+#
+#plat='windows'
+#ARCHS='amd64 386'
+#printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
+#for i in ${ARCHS}; do
+#    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
+#    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}-noinstaller.exe"
+#done
+#
+#plat='darwin'
+#ARCHS='amd64 arm64'
+#printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
+#for i in ${ARCHS}; do
+#    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
+#    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
+#done
+#
+#plat='freebsd'
+#ARCHS='amd64 386 arm64 arm'
+#printf >&2 "${YELLOW}Building ${plat} v${ver} agents...${NC}\n"
+#for i in ${ARCHS}; do
+#    printf >&2 "    ${YELLOW}- ${i}${NC}\n"
+#    env CGO_ENABLED=0 GOOS=${plat} GOARCH=${i} go build -ldflags "-s -w" -o "v${ver}/tacticalagent-v${ver}-${plat}-${i}"
+#done
+#
+#
+#printf >&2 "${YELLOW}Transferring all v${ver} binaries to the webhost...${NC}\n"
+#rsync -av --progress --inplace /home/tactical/rmmagent/v${ver} hiaservices@${webhost}:/home/hiaservices/public_html/rmmagent
+#
