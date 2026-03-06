@@ -20,26 +20,19 @@ from tacticalrmm.constants import (
 from tacticalrmm.helpers import notify_error
 
 
-#def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
-#    ver = settings.LATEST_AGENT_VER
-#    if token:
-#        params = {
-#            "version": ver,
-#            "arch": goarch,
-#            "token": token,
-#            "plat": plat,
-#            "api": settings.ALLOWED_HOSTS[0],
-#        }
-#        return settings.AGENTS_URL + urllib.parse.urlencode(params)
-#
-#    return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
-    
 def get_agent_url(*, goarch: str, plat: str, token: str = "") -> str:
     ver = settings.LATEST_AGENT_VER
-    if plat == "windows":
-        return f"https://hiaservices.com/rmmagent/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
+    if token:
+        params = {
+            "version": ver,
+            "arch": goarch,
+            "token": token,
+            "plat": plat,
+            "api": settings.ALLOWED_HOSTS[0],
+        }
+        return settings.AGENTS_URL + urllib.parse.urlencode(params)
 
-    return f"https://hiaservices.com/rmmagent/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}"
+    return f"https://github.com/amidaware/rmmagent/releases/download/v{ver}/tacticalagent-v{ver}-{plat}-{goarch}.exe"
 
 
 def generate_linux_install(
